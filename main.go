@@ -27,6 +27,7 @@ type DomainInfo struct {
 	TechStack        []string
 	IPAddress        string
 	IPOwner          string
+	MailProviders    []string
 }
 
 func main() {
@@ -59,19 +60,75 @@ func main() {
 		fmt.Printf("Warning: Error fetching IP info: %v\n", err)
 	}
 
-	// 3. WWW support and Tech Stack
+	// 3. Mail Providers
+	err = getMailInfo(domain, info)
+	if err != nil {
+		fmt.Printf("Warning: Error fetching MX records: %v\n", err)
+	}
+
+	// 4. WWW support and Tech Stack
 	err = getWebInfo(domain, info)
 	if err != nil {
 		fmt.Printf("Warning: Error fetching web info: %v\n", err)
 	}
 
-	// 4. TLS info
+	// 5. TLS info
 	err = getTLSInfo(domain, info)
 	if err != nil {
 		fmt.Printf("Warning: Error fetching TLS info: %v\n", err)
 	}
 
 	printResult(info)
+}
+
+func getMailInfo(domain string, info *DomainInfo) error {
+	mxs, err := net.LookupMX(domain)
+	if err != nil {
+		return err
+	}
+
+	hosts := []string{}
+	for _, mx := range mxs {
+		hosts = append(hosts, mx.Host)
+	}
+
+	info.MailProviders = identifyMailProviders(hosts)
+	return nil
+}
+
+func identifyMailProviders(hosts []string) []string {
+	providers := make(map[string]bool)
+	for _, host := range hosts {
+		host = strings.ToLower(host)
+		if strings.Contains(host, "google.com") || strings.Contains(host, "googlemail.com") {
+			providers["Google Workspace"] = true
+		} else if strings.Contains(host, "outlook.com") {
+			providers["Microsoft Outlook/Office 365"] = true
+		} else if strings.Contains(host, "zoho.com") {
+			providers["Zoho Mail"] = true
+		} else if strings.Contains(host, "protonmail.ch") || strings.Contains(host, "pm.me") {
+			providers["Proton Mail"] = true
+		} else if strings.Contains(host, "fastmail.com") {
+			providers["Fastmail"] = true
+		} else if strings.Contains(host, "secureserver.net") {
+			providers["GoDaddy Mail"] = true
+		} else if strings.Contains(host, "mimecast.com") {
+			providers["Mimecast"] = true
+		} else if strings.Contains(host, "pphosted.com") {
+			providers["Proofpoint"] = true
+		}
+	}
+
+	result := []string{}
+	for p := range providers {
+		result = append(result, p)
+	}
+
+	if len(result) == 0 && len(hosts) > 0 {
+		result = append(result, "Generic/Other (MX records found)")
+	}
+
+	return result
 }
 
 func getWhoisInfo(domain string, info *DomainInfo) error {
@@ -216,6 +273,7 @@ func printResult(info *DomainInfo) {
 	fmt.Println("--------------------------------------------------")
 	fmt.Printf("IP Address:    %s\n", info.IPAddress)
 	fmt.Printf("IP Owner:      %s\n", info.IPOwner)
+	fmt.Printf("Mail Providers: %s\n", strings.Join(info.MailProviders, ", "))
 	fmt.Println("--------------------------------------------------")
 	fmt.Printf("Tech Stack:    %s\n", strings.Join(info.TechStack, ", "))
 	fmt.Println("--------------------------------------------------")
