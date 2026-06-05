@@ -1,6 +1,6 @@
-# Snoopy (Domain Analyzer)
+# Domain Analyzer
 
-`snoopy` is a rapid domain reconnaissance tool written in Go. it aggregates information from multiple sources to provide a comprehensive view of a domain's status, infrastructure, and technology stack.
+`domain-analyzer` is a rapid domain reconnaissance tool written in Go. it aggregates information from multiple sources to provide a comprehensive view of a domain's status, infrastructure, and technology stack.
 
 ## Features
 
@@ -9,6 +9,8 @@
 - **Mail Provider Detection**: Identifies email services (e.g., Google Workspace, Microsoft 365, Proton Mail) by analyzing DNS MX records.
 - **Web Discovery**: Checks for `www.` support and fingerprints the technology stack using Wappalyzer.
 - **TLS/SSL Inspection**: Extracts certificate issuer and expiry information.
+- **Concurrent Execution**: All analysis modules run in parallel for maximum speed.
+- **Flexible Output**: Supports both Tabular (formatted console) and JSON output formats.
 
 ## Installation
 
@@ -21,62 +23,40 @@
 ```bash
 git clone https://github.com/yourusername/domain-analyzer.git
 cd domain-analyzer
-go build -o snoopy
+go build -o domain-analyzer
 ```
 
 ## Usage
 
-You can run `snoopy` by providing a domain name as a positional argument or using the `-domain` flag.
+Provide a domain name as a positional argument.
 
 ```bash
-# Direct execution
-go run main.go google.com
+# Basic usage (tabular output)
+./domain-analyzer google.com
 
-# Using the built binary
-./snoopy nextjs.org
-
-# Using the -domain flag
-./snoopy -domain vercel.com
+# JSON output
+./domain-analyzer google.com --format json
 ```
 
-### Example Output
+### Options
 
-```text
-Analyzing domain: google.com...
-
---------------------------------------------------
-Domain:        google.com
-Registrar:     MarkMonitor Inc.
-Domain Expiry: 2028-09-14T04:00:00Z
---------------------------------------------------
-Supports WWW:  true
-Has TLS:       true
-TLS Provider:  Google Trust Services
-TLS Expiry:    2026-08-10T18:35:20Z
---------------------------------------------------
-IP Address:    142.250.183.46
-IP Owner:      Google LLC (GOGL)
-Mail Providers: Google Workspace
---------------------------------------------------
-Tech Stack:    HTTP/3, Google Web Server
---------------------------------------------------
-```
+- `-f, --format`: Output format. Options: `tabular` (default), `json`.
+- `-h, --help`: Show help message.
 
 ## Development
 
-### Running Tests
-
-To run the unit tests for the mail provider identification logic:
-
-```bash
-go test -v .
-```
-
 ### Project Structure
 
-- `main.go`: Core logic and orchestration of analysis modules.
-- `main_test.go`: Unit tests for critical logic.
-- `GEMINI.md`: Project-specific instructions and architecture overview.
+The project follows a modular structure:
+- `main.go`: Entry point and CLI argument parsing using `go-flags`.
+- `analyzer/`: Package containing core analysis logic (WHOIS, DNS, Web, TLS).
+- `output/`: Package for formatting results into different output types.
+
+### Running Tests
+
+```bash
+go test ./...
+```
 
 ## License
 
