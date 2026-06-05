@@ -66,6 +66,7 @@ func (f *TabularFormatter) Format(info *analyzer.DomainInfo) error {
 	if info.TLS.HasTLS {
 		fmt.Fprintf(w, "TLS Provider\t%s\n", info.TLS.TLSIssuer)
 		fmt.Fprintf(w, "TLS Expiry\t%s\n", info.TLS.TLSExpiry)
+		fmt.Fprintf(w, "SAN Domains\t%s\n", strings.Join(info.TLS.SANDomains, ", "))
 	}
 
 	// --- WEB SECTION ---

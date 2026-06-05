@@ -38,9 +38,10 @@ type WebInfo struct {
 }
 
 type TLSInfo struct {
-	HasTLS    bool   `json:"has_tls"`
-	TLSIssuer string `json:"tls_issuer,omitempty"`
-	TLSExpiry string `json:"tls_expiry,omitempty"`
+	HasTLS     bool     `json:"has_tls"`
+	TLSIssuer  string   `json:"tls_issuer,omitempty"`
+	TLSExpiry  string   `json:"tls_expiry,omitempty"`
+	SANDomains []string `json:"san_domains,omitempty"`
 }
 
 type EmailInfo struct {

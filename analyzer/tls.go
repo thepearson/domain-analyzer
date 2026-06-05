@@ -31,6 +31,7 @@ func getTLSInfo(domain string, info *DomainInfo) error {
 			info.TLS.TLSIssuer = certs[0].Issuer.CommonName
 		}
 		info.TLS.TLSExpiry = certs[0].NotAfter.Format(time.RFC3339)
+		info.TLS.SANDomains = certs[0].DNSNames
 	}
 
 	return nil
