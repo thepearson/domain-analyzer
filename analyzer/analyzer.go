@@ -6,15 +6,19 @@ import (
 )
 
 type SPFDetails struct {
-	Raw      string   `json:"raw"`
-	Policy   string   `json:"policy,omitempty"`   // e.g., "Soft Fail (~all)"
-	Includes []string `json:"includes,omitempty"` // e.g., ["_spf.google.com"]
+	Raw         string   `json:"raw"`
+	Policy      string   `json:"policy,omitempty"` // e.g., "Soft Fail (~all)"
+	Status      string   `json:"status"`           // e.g., "Secure", "Warning", "Critical"
+	Description string   `json:"description"`      // Plain English explanation
+	Includes    []string `json:"includes,omitempty"`
 }
 
 type DMARCDetails struct {
 	Raw              string   `json:"raw"`
-	Policy           string   `json:"policy,omitempty"`            // e.g., "reject"
-	AggregateReports []string `json:"aggregate_reports,omitempty"` // e.g., ["mailto:reports@example.com"]
+	Policy           string   `json:"policy,omitempty"` // e.g., "reject"
+	Status           string   `json:"status"`           // e.g., "Secure", "Warning", "Critical"
+	Description      string   `json:"description"`      // Plain English explanation
+	AggregateReports []string `json:"aggregate_reports,omitempty"`
 }
 
 type CAADetails struct {
@@ -24,17 +28,30 @@ type CAADetails struct {
 }
 
 type DNSInfo struct {
-	IPAddress     string      `json:"ip_address,omitempty"`
-	IPOwner       string      `json:"ip_owner,omitempty"`
-	WWWAddress    string      `json:"www_address,omitempty"`
-	Nameservers   []string    `json:"nameservers,omitempty"`
-	NSProviders   []string    `json:"ns_providers,omitempty"`
-	CAARecord     *CAADetails `json:"caa,omitempty"`
+	IPAddress   string      `json:"ip_address,omitempty"`
+	IPOwner     string      `json:"ip_owner,omitempty"`
+	WWWAddress  string      `json:"www_address,omitempty"`
+	Nameservers []string    `json:"nameservers,omitempty"`
+	NSProviders []string    `json:"ns_providers,omitempty"`
+	CAARecord   *CAADetails `json:"caa,omitempty"`
 }
 
 type WebInfo struct {
 	TechStack       []string          `json:"tech_stack,omitempty"`
+	TechDetails     []TechDetail      `json:"tech_details,omitempty"`
 	SecurityHeaders map[string]string `json:"security_headers,omitempty"`
+}
+
+type TechDetail struct {
+	Name    string `json:"name"`
+	Version string `json:"version,omitempty"`
+}
+
+type Vulnerability struct {
+	ID          string `json:"id"`
+	Description string `json:"description"`
+	Severity    string `json:"severity,omitempty"`
+	URL         string `json:"url,omitempty"`
 }
 
 type TLSInfo struct {
@@ -56,17 +73,21 @@ type DomainInfo struct {
 	Registrar  string `json:"registrar,omitempty"`
 	ExpiryDate string `json:"expiry_date,omitempty"`
 
-	DNS   DNSInfo   `json:"dns"`
-	Web   WebInfo   `json:"web"`
-	TLS   TLSInfo   `json:"tls"`
-	Email EmailInfo `json:"email"`
+	DNS             DNSInfo         `json:"dns"`
+	Web             WebInfo         `json:"web"`
+	TLS             TLSInfo         `json:"tls"`
+	Email           EmailInfo       `json:"email"`
+	Vulnerabilities []Vulnerability `json:"vulnerabilities,omitempty"`
 }
 
-func Analyze(domain string) *DomainInfo {
+func Analyze(domain string, checkVulns bool) *DomainInfo {
 	info := &DomainInfo{Domain: domain}
 
 	var wg sync.WaitGroup
 	wg.Add(9)
+	if checkVulns {
+		wg.Add(1)
+	}
 
 	// 1. WHOIS info
 	go func() {
@@ -140,7 +161,25 @@ func Analyze(domain string) *DomainInfo {
 		}
 	}()
 
+	// 10. Vulnerabilities (Conditional)
+	if checkVulns {
+		go func() {
+			defer wg.Done()
+			// We need web info to be ready first for tech-based vulns,
+			// but we can also do general lookups.
+			// For tech-based vulns, we'll wait for getWebInfo to finish
+			// or just run it after wg.Wait() for simplicity.
+		}()
+	}
+
 	wg.Wait()
+
+	if checkVulns {
+		if err := getVulnerabilities(info); err != nil {
+			fmt.Printf("Warning: Error fetching vulnerabilities: %v\n", err)
+		}
+	}
+
 	return info
 }
 

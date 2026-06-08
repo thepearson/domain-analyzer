@@ -10,8 +10,9 @@ import (
 )
 
 type Options struct {
-	Format string `short:"f" long:"format" description:"Output format (tabular, json)" default:"tabular"`
-	Args   struct {
+	Format     string `short:"f" long:"format" description:"Output format (tabular, json)" default:"tabular"`
+	CheckVulns bool   `short:"v" long:"check-vulnerabilities" description:"Check for CVE vulnerabilities (may be slow)"`
+	Args       struct {
 		Domain string `positional-arg-name:"domain" description:"Domain name to analyze"`
 	} `positional-args:"yes" required:"yes"`
 }
@@ -29,7 +30,7 @@ func main() {
 	domain := opts.Args.Domain
 	fmt.Printf("Analyzing domain: %s...\n\n", domain)
 
-	info := analyzer.Analyze(domain)
+	info := analyzer.Analyze(domain, opts.CheckVulns)
 
 	var formatter output.Formatter
 	switch opts.Format {

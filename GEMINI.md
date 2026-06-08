@@ -16,11 +16,12 @@ The project is structured into modular packages to ensure scalability and testab
 ### Packages
 - **`main`**: Handles CLI argument parsing using `go-flags` and orchestrates the analysis and output.
 - **`analyzer`**: Contains the core logic for domain analysis.
-  - `Analyze(domain string)`: Orchestrates sub-modules concurrently using `sync.WaitGroup`.
+  - `Analyze(domain string, checkVulns bool)`: Orchestrates sub-modules concurrently using `sync.WaitGroup`.
   - `whois.go`: Registrar and expiration date retrieval.
   - `dns.go`: IP resolution, IP ownership (WHOIS), and mail provider detection.
-  - `web.go`: WWW support check and tech stack fingerprinting.
+  - `web.go`: WWW support check and tech stack fingerprinting with version detection.
   - `tls.go`: TLS certificate inspection.
+  - `vulnerabilities.go`: CVE lookup via NVD API based on detected tech versions.
 - **`output`**: Provides different formatters for displaying results.
   - `tabular.go`: Formatted table output using `tabwriter`.
   - `json.go`: Standard JSON serialization.
@@ -33,7 +34,7 @@ The project is structured into modular packages to ensure scalability and testab
 ### Build and Run
 ```bash
 go build -o domain-analyzer
-./domain-analyzer <domain> [--format tabular|json]
+./domain-analyzer <domain> [--format tabular|json] [--check-vulnerabilities]
 ```
 
 ## Development Conventions

@@ -48,7 +48,7 @@ func getDNSSecurityInfo(domain string, info *DomainInfo) error {
 }
 
 func ParseSPF(raw string) *SPFDetails {
-	details := &SPFDetails{Raw: raw}
+	details := &SPFDetails{Raw: raw, Status: "Warning", Description: "No policy enforcement found"}
 	parts := strings.Fields(raw)
 
 	for _, part := range parts {
@@ -56,25 +56,45 @@ func ParseSPF(raw string) *SPFDetails {
 			details.Includes = append(details.Includes, strings.TrimPrefix(part, "include:"))
 		} else if part == "-all" {
 			details.Policy = "Fail (-all)"
+			details.Status = "Secure"
+			details.Description = "Strict enforcement; unauthorized emails are rejected."
 		} else if part == "~all" {
 			details.Policy = "Soft Fail (~all)"
+			details.Status = "Warning"
+			details.Description = "Partial enforcement; unauthorized emails may still be delivered to spam."
 		} else if part == "?all" {
 			details.Policy = "Neutral (?all)"
+			details.Status = "Warning"
+			details.Description = "No enforcement; policy is effectively disabled."
 		} else if part == "+all" {
 			details.Policy = "Pass (+all)"
+			details.Status = "Critical"
+			details.Description = "Highly insecure; explicitly allows ANY server to send email on your behalf."
 		}
 	}
 	return details
 }
 
 func ParseDMARC(raw string) *DMARCDetails {
-	details := &DMARCDetails{Raw: raw}
+	details := &DMARCDetails{Raw: raw, Status: "Warning", Description: "DMARC record exists but may not be enforcing"}
 	parts := strings.Split(raw, ";")
 
 	for _, part := range parts {
 		part = strings.TrimSpace(part)
 		if strings.HasPrefix(part, "p=") {
-			details.Policy = strings.TrimPrefix(part, "p=")
+			p := strings.TrimPrefix(part, "p=")
+			details.Policy = p
+			switch p {
+			case "reject":
+				details.Status = "Secure"
+				details.Description = "Maximum protection; unauthorized emails are rejected by receivers."
+			case "quarantine":
+				details.Status = "Secure"
+				details.Description = "Strong protection; unauthorized emails are sent to the recipient's spam folder."
+			case "none":
+				details.Status = "Warning"
+				details.Description = "Monitoring mode only; no enforcement against spoofing."
+			}
 		} else if strings.HasPrefix(part, "rua=") {
 			reports := strings.Split(strings.TrimPrefix(part, "rua="), ",")
 			for _, r := range reports {

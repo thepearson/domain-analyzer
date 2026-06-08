@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/projectdiscovery/wappalyzergo"
@@ -82,18 +83,34 @@ func getWebInfo(domain string, info *DomainInfo) error {
 		if err != nil {
 			return err
 		}
+
+		// Fingerprint returns map[string]struct{} where keys can be "Tech:Version"
 		fingerprints := wappalyzerClient.Fingerprint(resp.Header, body)
 
 		techs := []string{}
-		for tech := range fingerprints {
-			techs = append(techs, tech)
+		details := []TechDetail{}
+		for techWithVersion := range fingerprints {
+			name := techWithVersion
+			version := ""
+
+			if parts := strings.SplitN(techWithVersion, ":", 2); len(parts) == 2 {
+				name = parts[0]
+				version = parts[1]
+			}
+
+			techs = append(techs, name)
+			details = append(details, TechDetail{
+				Name:    name,
+				Version: version,
+			})
 		}
 
 		info.Lock()
 		info.Web.TechStack = techs
+		info.Web.TechDetails = details
 		info.Unlock()
+
 	}
 
 	return nil
 }
-

@@ -23,7 +23,7 @@ func getTLSInfo(domain string, info *DomainInfo) error {
 	if len(certs) > 0 {
 		info.Lock()
 		defer info.Unlock()
-		
+
 		info.TLS.HasTLS = true
 		if len(certs[0].Issuer.Organization) > 0 {
 			info.TLS.TLSIssuer = certs[0].Issuer.Organization[0]
