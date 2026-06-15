@@ -2,15 +2,15 @@ package output
 
 import (
 	"encoding/json"
-	"os"
+	"io"
 
 	"domain-analyzer/analyzer"
 )
 
 type JSONFormatter struct{}
 
-func (f *JSONFormatter) Format(info *analyzer.DomainInfo) error {
-	encoder := json.NewEncoder(os.Stdout)
+func (f *JSONFormatter) Format(w io.Writer, info *analyzer.DomainInfo) error {
+	encoder := json.NewEncoder(w)
 	encoder.SetIndent("", "  ")
 	return encoder.Encode(info)
 }

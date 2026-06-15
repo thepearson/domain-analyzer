@@ -14,7 +14,7 @@
 The project is structured into modular packages to ensure scalability and testability.
 
 ### Packages
-- **`main`**: Handles CLI argument parsing using `go-flags` and orchestrates the analysis and output.
+- **`main`**: Handles CLI argument parsing using `go-flags`. It supports reading domains from positional arguments and stdin, orchestration of analysis across multiple domains, and redirection of output to files.
 - **`analyzer`**: Contains the core logic for domain analysis.
   - `Analyze(domain string, checkVulns bool)`: Orchestrates sub-modules concurrently using `sync.WaitGroup`.
   - `whois.go`: Registrar and expiration date retrieval.
@@ -22,9 +22,10 @@ The project is structured into modular packages to ensure scalability and testab
   - `web.go`: WWW support check and tech stack fingerprinting with version detection.
   - `tls.go`: TLS certificate inspection.
   - `vulnerabilities.go`: CVE lookup via NVD API based on detected tech versions.
-- **`output`**: Provides different formatters for displaying results.
+- **`output`**: Provides different formatters for displaying results. All formatters implement a shared `Formatter` interface that writes to an `io.Writer`.
   - `tabular.go`: Formatted table output using `tabwriter`.
   - `json.go`: Standard JSON serialization.
+  - `csv.go`: Comma-separated values for spreadsheet compatibility.
 
 ## Building and Running
 
@@ -34,11 +35,15 @@ The project is structured into modular packages to ensure scalability and testab
 ### Build and Run
 ```bash
 go build -o domain-analyzer
-./domain-analyzer <domain> [--format tabular|json] [--check-vulnerabilities]
+# Single domain
+./domain-analyzer <domain> [--format tabular|json|csv] [--output file] [--check-vulnerabilities]
+# Bulk analysis
+cat domains.txt | ./domain-analyzer --format csv --output scan_results.csv
 ```
 
 ## Development Conventions
 - **Concurrency:** All analysis modules must run in parallel. Shared state in `DomainInfo` is protected by a `sync.Mutex`.
-- **Error Handling:** Non-critical errors (e.g., a timeout on one specific check) are printed as warnings, allowing the rest of the analysis to complete.
+- **Error Handling:** Non-critical errors (e.g., a timeout on one specific check) are printed as warnings to `stderr`, allowing the rest of the analysis to complete.
 - **Timeouts:** HTTP and TLS connections have aggressive timeouts (10-15s) to ensure the utility remains responsive.
 - **Formatting:** Adheres to standard `go fmt` conventions.
+- **Output:** Progress and error messages should be directed to `stderr` to avoid polluting data output on `stdout` or files.

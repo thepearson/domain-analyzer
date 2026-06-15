@@ -2,7 +2,7 @@ package output
 
 import (
 	"fmt"
-	"os"
+	"io"
 	"sort"
 	"strings"
 	"text/tabwriter"
@@ -12,71 +12,71 @@ import (
 
 type TabularFormatter struct{}
 
-func (f *TabularFormatter) Format(info *analyzer.DomainInfo) error {
-	w := tabwriter.NewWriter(os.Stdout, 0, 8, 2, ' ', 0)
+func (f *TabularFormatter) Format(w io.Writer, info *analyzer.DomainInfo) error {
+	tw := tabwriter.NewWriter(w, 0, 8, 2, ' ', 0)
 
 	// --- DNS SECTION ---
-	fmt.Fprintln(w, "==================================================")
-	fmt.Fprintf(w, "CATEGORY: DNS\n")
-	fmt.Fprintln(w, "==================================================")
-	fmt.Fprintf(w, "Domain\t%s\n", info.Domain)
+	fmt.Fprintln(tw, "==================================================")
+	fmt.Fprintf(tw, "CATEGORY: DNS\n")
+	fmt.Fprintln(tw, "==================================================")
+	fmt.Fprintf(tw, "Domain\t%s\n", info.Domain)
 	if info.ApexDomain != "" && info.ApexDomain != info.Domain {
-		fmt.Fprintf(w, "Apex Domain\t%s\n", info.ApexDomain)
+		fmt.Fprintf(tw, "Apex Domain\t%s\n", info.ApexDomain)
 	}
-	fmt.Fprintf(w, "Registrar\t%s\n", info.Registrar)
-	fmt.Fprintf(w, "Domain Expiry\t%s\n", info.ExpiryDate)
-	fmt.Fprintf(w, "IP Address\t%s\n", info.DNS.IPAddress)
-	fmt.Fprintf(w, "IP Owner\t%s\n", info.DNS.IPOwner)
-	fmt.Fprintf(w, "WWW DNS Result\t%s\n", info.DNS.WWWAddress)
-	fmt.Fprintf(w, "Nameservers\t%s\n", strings.Join(info.DNS.Nameservers, ", "))
-	fmt.Fprintf(w, "DNS Providers\t%s\n", strings.Join(info.DNS.NSProviders, ", "))
+	fmt.Fprintf(tw, "Registrar\t%s\n", info.Registrar)
+	fmt.Fprintf(tw, "Domain Expiry\t%s\n", info.ExpiryDate)
+	fmt.Fprintf(tw, "IP Address\t%s\n", info.DNS.IPAddress)
+	fmt.Fprintf(tw, "IP Owner\t%s\n", info.DNS.IPOwner)
+	fmt.Fprintf(tw, "WWW DNS Result\t%s\n", info.DNS.WWWAddress)
+	fmt.Fprintf(tw, "Nameservers\t%s\n", strings.Join(info.DNS.Nameservers, ", "))
+	fmt.Fprintf(tw, "DNS Providers\t%s\n", strings.Join(info.DNS.NSProviders, ", "))
 
 	if info.DNS.CAARecord != nil {
-		fmt.Fprintf(w, "CAA Issuers\t%s\n", strings.Join(info.DNS.CAARecord.Issuers, ", "))
-		fmt.Fprintf(w, "CAA Wildcards\t%s\n", strings.Join(info.DNS.CAARecord.IssueWildcards, ", "))
-		fmt.Fprintf(w, "CAA Raw\t%s\n", strings.Join(info.DNS.CAARecord.RawRecords, ", "))
+		fmt.Fprintf(tw, "CAA Issuers\t%s\n", strings.Join(info.DNS.CAARecord.Issuers, ", "))
+		fmt.Fprintf(tw, "CAA Wildcards\t%s\n", strings.Join(info.DNS.CAARecord.IssueWildcards, ", "))
+		fmt.Fprintf(tw, "CAA Raw\t%s\n", strings.Join(info.DNS.CAARecord.RawRecords, ", "))
 	} else {
-		fmt.Fprintf(w, "CAA Records\tNot found\n")
+		fmt.Fprintf(tw, "CAA Records\tNot found\n")
 	}
 
 	// --- EMAIL SECTION ---
-	fmt.Fprintln(w, "\n==================================================")
-	fmt.Fprintf(w, "CATEGORY: EMAIL\n")
-	fmt.Fprintln(w, "==================================================")
-	fmt.Fprintf(w, "Mail Providers\t%s\n", strings.Join(info.Email.MailProviders, ", "))
+	fmt.Fprintln(tw, "\n==================================================")
+	fmt.Fprintf(tw, "CATEGORY: EMAIL\n")
+	fmt.Fprintln(tw, "==================================================")
+	fmt.Fprintf(tw, "Mail Providers\t%s\n", strings.Join(info.Email.MailProviders, ", "))
 
 	if info.Email.SPFRecord != nil {
-		fmt.Fprintf(w, "SPF Status\t[%s] %s\n", info.Email.SPFRecord.Status, info.Email.SPFRecord.Description)
-		fmt.Fprintf(w, "SPF Policy\t%s\n", info.Email.SPFRecord.Policy)
-		fmt.Fprintf(w, "SPF Includes\t%s\n", strings.Join(info.Email.SPFRecord.Includes, ", "))
-		fmt.Fprintf(w, "SPF Raw\t%s\n", info.Email.SPFRecord.Raw)
+		fmt.Fprintf(tw, "SPF Status\t[%s] %s\n", info.Email.SPFRecord.Status, info.Email.SPFRecord.Description)
+		fmt.Fprintf(tw, "SPF Policy\t%s\n", info.Email.SPFRecord.Policy)
+		fmt.Fprintf(tw, "SPF Includes\t%s\n", strings.Join(info.Email.SPFRecord.Includes, ", "))
+		fmt.Fprintf(tw, "SPF Raw\t%s\n", info.Email.SPFRecord.Raw)
 	} else {
-		fmt.Fprintf(w, "SPF Record\tNot found\n")
+		fmt.Fprintf(tw, "SPF Record\tNot found\n")
 	}
 
 	if info.Email.DMARCRecord != nil {
-		fmt.Fprintf(w, "DMARC Status\t[%s] %s\n", info.Email.DMARCRecord.Status, info.Email.DMARCRecord.Description)
-		fmt.Fprintf(w, "DMARC Policy\t%s\n", info.Email.DMARCRecord.Policy)
-		fmt.Fprintf(w, "DMARC Reports\t%s\n", strings.Join(info.Email.DMARCRecord.AggregateReports, ", "))
-		fmt.Fprintf(w, "DMARC Raw\t%s\n", info.Email.DMARCRecord.Raw)
+		fmt.Fprintf(tw, "DMARC Status\t[%s] %s\n", info.Email.DMARCRecord.Status, info.Email.DMARCRecord.Description)
+		fmt.Fprintf(tw, "DMARC Policy\t%s\n", info.Email.DMARCRecord.Policy)
+		fmt.Fprintf(tw, "DMARC Reports\t%s\n", strings.Join(info.Email.DMARCRecord.AggregateReports, ", "))
+		fmt.Fprintf(tw, "DMARC Raw\t%s\n", info.Email.DMARCRecord.Raw)
 	} else {
-		fmt.Fprintf(w, "DMARC Record\tNot found\n")
+		fmt.Fprintf(tw, "DMARC Record\tNot found\n")
 	}
 	// --- SSL/TLS SECTION ---
-	fmt.Fprintln(w, "\n==================================================")
-	fmt.Fprintf(w, "CATEGORY: SSL/TLS\n")
-	fmt.Fprintln(w, "==================================================")
-	fmt.Fprintf(w, "Has TLS\t%v\n", info.TLS.HasTLS)
+	fmt.Fprintln(tw, "\n==================================================")
+	fmt.Fprintf(tw, "CATEGORY: SSL/TLS\n")
+	fmt.Fprintln(tw, "==================================================")
+	fmt.Fprintf(tw, "Has TLS\t%v\n", info.TLS.HasTLS)
 	if info.TLS.HasTLS {
-		fmt.Fprintf(w, "TLS Provider\t%s\n", info.TLS.TLSIssuer)
-		fmt.Fprintf(w, "TLS Expiry\t%s\n", info.TLS.TLSExpiry)
-		fmt.Fprintf(w, "SAN Domains\t%s\n", strings.Join(info.TLS.SANDomains, ", "))
+		fmt.Fprintf(tw, "TLS Provider\t%s\n", info.TLS.TLSIssuer)
+		fmt.Fprintf(tw, "TLS Expiry\t%s\n", info.TLS.TLSExpiry)
+		fmt.Fprintf(tw, "SAN Domains\t%s\n", strings.Join(info.TLS.SANDomains, ", "))
 	}
 
 	// --- WEB SECTION ---
-	fmt.Fprintln(w, "\n==================================================")
-	fmt.Fprintf(w, "CATEGORY: WEB\n")
-	fmt.Fprintln(w, "==================================================")
+	fmt.Fprintln(tw, "\n==================================================")
+	fmt.Fprintf(tw, "CATEGORY: WEB\n")
+	fmt.Fprintln(tw, "==================================================")
 
 	techs := []string{}
 	for _, t := range info.Web.TechDetails {
@@ -89,7 +89,7 @@ func (f *TabularFormatter) Format(info *analyzer.DomainInfo) error {
 	if len(techs) == 0 {
 		techs = info.Web.TechStack
 	}
-	fmt.Fprintf(w, "Tech Stack\t%s\n", strings.Join(techs, ", "))
+	fmt.Fprintf(tw, "Tech Stack\t%s\n", strings.Join(techs, ", "))
 
 	if len(info.Web.SecurityHeaders) > 0 {
 		// Sort headers for consistent output
@@ -99,30 +99,30 @@ func (f *TabularFormatter) Format(info *analyzer.DomainInfo) error {
 		}
 		sort.Strings(keys)
 		for _, k := range keys {
-			fmt.Fprintf(w, "Header: %s\t%s\n", k, info.Web.SecurityHeaders[k])
+			fmt.Fprintf(tw, "Header: %s\t%s\n", k, info.Web.SecurityHeaders[k])
 		}
 	} else {
-		fmt.Fprintf(w, "Security Headers\tNot checked or failed\n")
+		fmt.Fprintf(tw, "Security Headers\tNot checked or failed\n")
 	}
 
 	// --- VULNERABILITIES SECTION ---
 	if len(info.Vulnerabilities) > 0 {
-		fmt.Fprintln(w, "\n==================================================")
-		fmt.Fprintf(w, "CATEGORY: VULNERABILITIES\n")
-		fmt.Fprintln(w, "==================================================")
+		fmt.Fprintln(tw, "\n==================================================")
+		fmt.Fprintf(tw, "CATEGORY: VULNERABILITIES\n")
+		fmt.Fprintln(tw, "==================================================")
 		for _, v := range info.Vulnerabilities {
-			fmt.Fprintf(w, "%s [%s]\t%s\n", v.ID, v.Severity, v.Description)
+			fmt.Fprintf(tw, "%s [%s]\t%s\n", v.ID, v.Severity, v.Description)
 		}
 	} else if len(info.Web.TechDetails) > 0 && info.Vulnerabilities == nil {
 		// This means we didn't check for vulnerabilities
 	} else if len(info.Web.TechDetails) > 0 {
-		fmt.Fprintln(w, "\n==================================================")
-		fmt.Fprintf(w, "CATEGORY: VULNERABILITIES\n")
-		fmt.Fprintln(w, "==================================================")
-		fmt.Fprintf(w, "CVE Check\tNo known vulnerabilities found for detected versions\n")
+		fmt.Fprintln(tw, "\n==================================================")
+		fmt.Fprintf(tw, "CATEGORY: VULNERABILITIES\n")
+		fmt.Fprintln(tw, "==================================================")
+		fmt.Fprintf(tw, "CVE Check\tNo known vulnerabilities found for detected versions\n")
 	}
 
-	fmt.Fprintln(w, "==================================================")
+	fmt.Fprintln(tw, "==================================================")
 
-	return w.Flush()
+	return tw.Flush()
 }

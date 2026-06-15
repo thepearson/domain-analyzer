@@ -1,7 +1,10 @@
 package output
 
-import "domain-analyzer/analyzer"
+import (
+	"domain-analyzer/analyzer"
+	"io"
+)
 
 type Formatter interface {
-	Format(info *analyzer.DomainInfo) error
+	Format(w io.Writer, info *analyzer.DomainInfo) error
 }
