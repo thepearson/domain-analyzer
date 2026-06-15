@@ -3,6 +3,8 @@ package analyzer
 import (
 	"fmt"
 	"sync"
+
+	"golang.org/x/net/publicsuffix"
 )
 
 type SPFDetails struct {
@@ -70,6 +72,7 @@ type EmailInfo struct {
 type DomainInfo struct {
 	mu         sync.Mutex
 	Domain     string `json:"domain"`
+	ApexDomain string `json:"apex_domain"`
 	Registrar  string `json:"registrar,omitempty"`
 	ExpiryDate string `json:"expiry_date,omitempty"`
 
@@ -81,7 +84,15 @@ type DomainInfo struct {
 }
 
 func Analyze(domain string, checkVulns bool) *DomainInfo {
-	info := &DomainInfo{Domain: domain}
+	apexDomain, err := publicsuffix.EffectiveTLDPlusOne(domain)
+	if err != nil {
+		apexDomain = domain // Fallback
+	}
+
+	info := &DomainInfo{
+		Domain:     domain,
+		ApexDomain: apexDomain,
+	}
 
 	var wg sync.WaitGroup
 	wg.Add(9)
@@ -89,15 +100,15 @@ func Analyze(domain string, checkVulns bool) *DomainInfo {
 		wg.Add(1)
 	}
 
-	// 1. WHOIS info
+	// 1. WHOIS info (Apex)
 	go func() {
 		defer wg.Done()
-		if err := getWhoisInfo(domain, info); err != nil {
+		if err := getWhoisInfo(apexDomain, info); err != nil {
 			fmt.Printf("Warning: Error fetching WHOIS info: %v\n", err)
 		}
 	}()
 
-	// 2. DNS & IP Ownership
+	// 2. DNS & IP Ownership (Subdomain)
 	go func() {
 		defer wg.Done()
 		if err := getIPInfo(domain, info); err != nil {
@@ -105,31 +116,36 @@ func Analyze(domain string, checkVulns bool) *DomainInfo {
 		}
 	}()
 
-	// 3. Nameserver info
+	// 3. Nameserver info (Apex)
 	go func() {
 		defer wg.Done()
-		if err := getNameserverInfo(domain, info); err != nil {
+		if err := getNameserverInfo(apexDomain, info); err != nil {
 			fmt.Printf("Warning: Error fetching NS info: %v\n", err)
 		}
 	}()
 
-	// 4. WWW DNS info
+	// 4. WWW DNS info (Only if input is Apex)
 	go func() {
 		defer wg.Done()
-		if err := getWWWInfo(domain, info); err != nil {
-			// Don't print warning for missing WWW as it's common
+		if domain == apexDomain {
+			if err := getWWWInfo(domain, info); err != nil {
+				// Don't print warning for missing WWW as it's common
+			}
+		} else {
+			// If we are already on a subdomain, we don't necessarily need to check 'www.' + subdomain
+			// unless we really want to. For now, we'll skip it to keep output clean.
 		}
 	}()
 
-	// 5. Mail Providers
+	// 5. Mail Providers (Apex)
 	go func() {
 		defer wg.Done()
-		if err := getMailInfo(domain, info); err != nil {
+		if err := getMailInfo(apexDomain, info); err != nil {
 			fmt.Printf("Warning: Error fetching MX records: %v\n", err)
 		}
 	}()
 
-	// 6. Web info (Tech Stack)
+	// 6. Web info (Subdomain)
 	go func() {
 		defer wg.Done()
 		if err := getWebInfo(domain, info); err != nil {
@@ -137,7 +153,7 @@ func Analyze(domain string, checkVulns bool) *DomainInfo {
 		}
 	}()
 
-	// 7. TLS info
+	// 7. TLS info (Subdomain)
 	go func() {
 		defer wg.Done()
 		if err := getTLSInfo(domain, info); err != nil {
@@ -145,21 +161,22 @@ func Analyze(domain string, checkVulns bool) *DomainInfo {
 		}
 	}()
 
-	// 8. DNS Security Info (SPF, DMARC, CAA)
+	// 8. DNS Security Info (Split: SPF/DMARC on Apex, CAA on Subdomain)
 	go func() {
 		defer wg.Done()
-		if err := getDNSSecurityInfo(domain, info); err != nil {
+		if err := getDNSSecurityInfo(domain, apexDomain, info); err != nil {
 			fmt.Printf("Warning: Error fetching DNS security info: %v\n", err)
 		}
 	}()
 
-	// 9. HTTP Security Headers
+	// 9. HTTP Security Headers (Subdomain)
 	go func() {
 		defer wg.Done()
 		if err := getSecurityHeaders(domain, info); err != nil {
 			fmt.Printf("Warning: Error fetching security headers: %v\n", err)
 		}
 	}()
+
 
 	// 10. Vulnerabilities (Conditional)
 	if checkVulns {

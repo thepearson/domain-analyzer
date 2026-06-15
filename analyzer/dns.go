@@ -9,9 +9,9 @@ import (
 	"github.com/miekg/dns"
 )
 
-func getDNSSecurityInfo(domain string, info *DomainInfo) error {
-	// SPF
-	txts, err := net.LookupTXT(domain)
+func getDNSSecurityInfo(domain string, apexDomain string, info *DomainInfo) error {
+	// SPF (Apex)
+	txts, err := net.LookupTXT(apexDomain)
 	if err == nil {
 		for _, txt := range txts {
 			if strings.HasPrefix(txt, "v=spf1") {
@@ -23,8 +23,8 @@ func getDNSSecurityInfo(domain string, info *DomainInfo) error {
 		}
 	}
 
-	// DMARC
-	dmarcTxts, err := net.LookupTXT("_dmarc." + domain)
+	// DMARC (Apex)
+	dmarcTxts, err := net.LookupTXT("_dmarc." + apexDomain)
 	if err == nil {
 		for _, txt := range dmarcTxts {
 			if strings.HasPrefix(txt, "v=DMARC1") {
@@ -36,7 +36,7 @@ func getDNSSecurityInfo(domain string, info *DomainInfo) error {
 		}
 	}
 
-	// CAA
+	// CAA (Subdomain)
 	caaDetails, err := lookupCAA(domain)
 	if err == nil && caaDetails != nil {
 		info.Lock()

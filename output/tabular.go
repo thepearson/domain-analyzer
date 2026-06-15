@@ -20,6 +20,9 @@ func (f *TabularFormatter) Format(info *analyzer.DomainInfo) error {
 	fmt.Fprintf(w, "CATEGORY: DNS\n")
 	fmt.Fprintln(w, "==================================================")
 	fmt.Fprintf(w, "Domain\t%s\n", info.Domain)
+	if info.ApexDomain != "" && info.ApexDomain != info.Domain {
+		fmt.Fprintf(w, "Apex Domain\t%s\n", info.ApexDomain)
+	}
 	fmt.Fprintf(w, "Registrar\t%s\n", info.Registrar)
 	fmt.Fprintf(w, "Domain Expiry\t%s\n", info.ExpiryDate)
 	fmt.Fprintf(w, "IP Address\t%s\n", info.DNS.IPAddress)

@@ -109,26 +109,32 @@ func TestParseSPF(t *testing.T) {
 			name:  "Basic SPF with softfail",
 			input: "v=spf1 include:_spf.google.com ~all",
 			expected: &SPFDetails{
-				Raw:      "v=spf1 include:_spf.google.com ~all",
-				Policy:   "Soft Fail (~all)",
-				Includes: []string{"_spf.google.com"},
+				Raw:         "v=spf1 include:_spf.google.com ~all",
+				Policy:      "Soft Fail (~all)",
+				Status:      "Warning",
+				Description: "Partial enforcement; unauthorized emails may still be delivered to spam.",
+				Includes:    []string{"_spf.google.com"},
 			},
 		},
 		{
 			name:  "SPF with multiple includes and fail",
 			input: "v=spf1 include:spf.example.com include:other.com -all",
 			expected: &SPFDetails{
-				Raw:      "v=spf1 include:spf.example.com include:other.com -all",
-				Policy:   "Fail (-all)",
-				Includes: []string{"spf.example.com", "other.com"},
+				Raw:         "v=spf1 include:spf.example.com include:other.com -all",
+				Policy:      "Fail (-all)",
+				Status:      "Secure",
+				Description: "Strict enforcement; unauthorized emails are rejected.",
+				Includes:    []string{"spf.example.com", "other.com"},
 			},
 		},
 		{
 			name:  "SPF with neutral",
 			input: "v=spf1 ?all",
 			expected: &SPFDetails{
-				Raw:    "v=spf1 ?all",
-				Policy: "Neutral (?all)",
+				Raw:         "v=spf1 ?all",
+				Policy:      "Neutral (?all)",
+				Status:      "Warning",
+				Description: "No enforcement; policy is effectively disabled.",
 			},
 		},
 	}
@@ -137,7 +143,7 @@ func TestParseSPF(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			got := ParseSPF(tt.input)
 			if !reflect.DeepEqual(got, tt.expected) {
-				t.Errorf("ParseSPF() = %v, want %v", got, tt.expected)
+				t.Errorf("ParseSPF() = %+v, want %+v", got, tt.expected)
 			}
 		})
 	}
@@ -155,6 +161,8 @@ func TestParseDMARC(t *testing.T) {
 			expected: &DMARCDetails{
 				Raw:              "v=DMARC1; p=reject; rua=mailto:reports@example.com",
 				Policy:           "reject",
+				Status:           "Secure",
+				Description:      "Maximum protection; unauthorized emails are rejected by receivers.",
 				AggregateReports: []string{"mailto:reports@example.com"},
 			},
 		},
@@ -164,6 +172,8 @@ func TestParseDMARC(t *testing.T) {
 			expected: &DMARCDetails{
 				Raw:              "v=DMARC1; p=quarantine; rua=mailto:a@test.com, mailto:b@test.com",
 				Policy:           "quarantine",
+				Status:           "Secure",
+				Description:      "Strong protection; unauthorized emails are sent to the recipient's spam folder.",
 				AggregateReports: []string{"mailto:a@test.com", "mailto:b@test.com"},
 			},
 		},
@@ -173,7 +183,7 @@ func TestParseDMARC(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			got := ParseDMARC(tt.input)
 			if !reflect.DeepEqual(got, tt.expected) {
-				t.Errorf("ParseDMARC() = %v, want %v", got, tt.expected)
+				t.Errorf("ParseDMARC() = %+v, want %+v", got, tt.expected)
 			}
 		})
 	}
