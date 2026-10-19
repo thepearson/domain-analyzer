@@ -6,8 +6,6 @@ import (
 	"net/http"
 	"strings"
 	"time"
-
-	"github.com/projectdiscovery/wappalyzergo"
 )
 
 func getSecurityHeaders(domain string, info *DomainInfo) error {
@@ -79,9 +77,9 @@ func getWebInfo(domain string, info *DomainInfo) error {
 			return err
 		}
 
-		wappalyzerClient, err := wappalyzer.New()
-		if err != nil {
-			return err
+		wappalyzerClient := getWappalyzerClient()
+		if wappalyzerClient == nil {
+			return fmt.Errorf("failed to initialize wappalyzer client")
 		}
 
 		// Fingerprint returns map[string]struct{} where keys can be "Tech:Version"

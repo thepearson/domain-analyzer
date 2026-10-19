@@ -105,6 +105,33 @@ func (f *TabularFormatter) Format(w io.Writer, info *analyzer.DomainInfo) error 
 		fmt.Fprintf(tw, "Security Headers\tNot checked or failed\n")
 	}
 
+	// --- WAF SECTION ---
+	fmt.Fprintln(tw, "\n==================================================")
+	fmt.Fprintf(tw, "CATEGORY: WAF\n")
+	fmt.Fprintln(tw, "==================================================")
+	fmt.Fprintf(tw, "WAF Detected\t%v\n", info.WAF.Detected)
+	if info.WAF.Summary != "" {
+		fmt.Fprintf(tw, "WAF Summary\t%s\n", info.WAF.Summary)
+	}
+	if len(info.WAF.CNAMEs) > 0 {
+		fmt.Fprintf(tw, "CNAME Chain\t%s\n", strings.Join(info.WAF.CNAMEs, " -> "))
+	}
+	if info.WAF.BaselineStatus > 0 || info.WAF.ProbeStatus > 0 {
+		fmt.Fprintf(tw, "HTTP Probe Status\tBaseline: %d, WAF Trigger: %d\n", info.WAF.BaselineStatus, info.WAF.ProbeStatus)
+	}
+	for _, p := range info.WAF.Providers {
+		fmt.Fprintf(tw, "Provider [%s]\t%s\n", p.Provider, p.State)
+		if len(p.Implementation) > 0 {
+			fmt.Fprintf(tw, "  Implementation\t%s\n", strings.Join(p.Implementation, "; "))
+		}
+		if len(p.Evidence) > 0 {
+			fmt.Fprintf(tw, "  Evidence\t%s\n", strings.Join(p.Evidence, ", "))
+		}
+	}
+	for _, note := range info.WAF.OriginNotes {
+		fmt.Fprintf(tw, "Downstream Note\t%s\n", note)
+	}
+
 	// --- VULNERABILITIES SECTION ---
 	if len(info.Vulnerabilities) > 0 {
 		fmt.Fprintln(tw, "\n==================================================")

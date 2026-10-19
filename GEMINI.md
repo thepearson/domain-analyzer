@@ -20,6 +20,7 @@ The project is structured into modular packages to ensure scalability and testab
   - `whois.go`: Registrar and expiration date retrieval.
   - `dns.go`: IP resolution, IP ownership (WHOIS), and mail provider detection.
   - `web.go`: WWW support check and tech stack fingerprinting with version detection.
+  - `waf.go`: WAF detection, implementation details (CNAME chain, edge proxy/CDN, bot management), and active enforcement probing.
   - `tls.go`: TLS certificate inspection.
   - `vulnerabilities.go`: CVE lookup via NVD API based on detected tech versions.
 - **`output`**: Provides different formatters for displaying results. All formatters implement a shared `Formatter` interface that writes to an `io.Writer`.

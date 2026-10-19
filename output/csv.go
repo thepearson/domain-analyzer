@@ -33,6 +33,9 @@ func (f *CSVFormatter) Format(w io.Writer, info *analyzer.DomainInfo) error {
 			"TLS Expiry",
 			"SPF Status",
 			"DMARC Status",
+			"WAF Detected",
+			"WAF Summary",
+			"WAF Implementation",
 			"Vulnerability Count",
 		}
 		if err := writer.Write(header); err != nil {
@@ -56,6 +59,15 @@ func (f *CSVFormatter) Format(w io.Writer, info *analyzer.DomainInfo) error {
 		dmarcStatus = info.Email.DMARCRecord.Status
 	}
 
+	var wafImpls []string
+	for _, p := range info.WAF.Providers {
+		if len(p.Implementation) > 0 {
+			wafImpls = append(wafImpls, p.Provider+": "+strings.Join(p.Implementation, ", "))
+		} else {
+			wafImpls = append(wafImpls, p.Provider)
+		}
+	}
+
 	record := []string{
 		info.Domain,
 		info.ApexDomain,
@@ -71,6 +83,9 @@ func (f *CSVFormatter) Format(w io.Writer, info *analyzer.DomainInfo) error {
 		info.TLS.TLSExpiry,
 		spfStatus,
 		dmarcStatus,
+		strconv.FormatBool(info.WAF.Detected),
+		info.WAF.Summary,
+		strings.Join(wafImpls, "; "),
 		strconv.Itoa(len(info.Vulnerabilities)),
 	}
 

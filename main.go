@@ -87,7 +87,7 @@ func main() {
 		}
 
 		if opts.Format == "tabular" && i < len(domains)-1 {
-			fmt.Fprintln(out, "\n")
+			fmt.Fprintln(out)
 		}
 	}
 }

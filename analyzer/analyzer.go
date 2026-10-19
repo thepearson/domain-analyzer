@@ -78,6 +78,7 @@ type DomainInfo struct {
 
 	DNS             DNSInfo         `json:"dns"`
 	Web             WebInfo         `json:"web"`
+	WAF             WAFInfo         `json:"waf"`
 	TLS             TLSInfo         `json:"tls"`
 	Email           EmailInfo       `json:"email"`
 	Vulnerabilities []Vulnerability `json:"vulnerabilities,omitempty"`
@@ -95,7 +96,7 @@ func Analyze(domain string, checkVulns bool) *DomainInfo {
 	}
 
 	var wg sync.WaitGroup
-	wg.Add(9)
+	wg.Add(10)
 	if checkVulns {
 		wg.Add(1)
 	}
@@ -177,8 +178,15 @@ func Analyze(domain string, checkVulns bool) *DomainInfo {
 		}
 	}()
 
+	// 10. WAF Status & Implementation
+	go func() {
+		defer wg.Done()
+		if err := getWAFInfo(domain, apexDomain, info); err != nil {
+			fmt.Printf("Warning: Error fetching WAF info: %v\n", err)
+		}
+	}()
 
-	// 10. Vulnerabilities (Conditional)
+	// 11. Vulnerabilities (Conditional)
 	if checkVulns {
 		go func() {
 			defer wg.Done()

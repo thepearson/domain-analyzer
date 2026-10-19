@@ -48,6 +48,13 @@ CATEGORY: WEB
 ==================================================
 Tech Stack        HTTP/3, Google Web Server
 Security Headers  Not checked or failed
+
+==================================================
+CATEGORY: WAF
+==================================================
+WAF Detected       false
+WAF Summary        No WAF detected
+HTTP Probe Status  Baseline: 200, WAF Trigger: 200
 ==================================================
 ```
 
@@ -57,6 +64,7 @@ Security Headers  Not checked or failed
 - **DNS & IP Analysis**: Resolves IP addresses and identifies the IP owner (ISP/Hosting Provider).
 - **Mail Provider Detection**: Identifies email services (e.g., Google Workspace, Microsoft 365, Proton Mail) by analyzing DNS MX records.
 - **Web Discovery**: Checks for `www.` support and fingerprints the technology stack using Wappalyzer.
+- **WAF Detection & Implementation Analysis**: Identifies WAF/Edge providers (Cloudflare, Fastly / Signal Sciences, AWS WAF, Azure Front Door/WAF, RedShield, Imperva, Wordfence, etc.), inspects CNAME chains, headers, and cookies across redirects, and sends a benign XSS probe to determine if the WAF is actively enforcing or in passthrough/monitor mode.
 - **TLS/SSL Inspection**: Extracts certificate issuer and expiry information.
 - **Concurrent Execution**: All analysis modules run in parallel for maximum speed.
 - **Flexible Output**: Supports Tabular, JSON, and CSV output formats.
