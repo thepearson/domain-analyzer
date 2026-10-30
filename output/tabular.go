@@ -132,6 +132,19 @@ func (f *TabularFormatter) Format(w io.Writer, info *analyzer.DomainInfo) error 
 		fmt.Fprintf(tw, "Security Headers\tNot checked or failed\n")
 	}
 
+	if info.HTTPTrace != nil && len(info.HTTPTrace.Hops) > 0 {
+		var chainParts []string
+		for _, h := range info.HTTPTrace.Hops {
+			chainParts = append(chainParts, fmt.Sprintf("%s [%d]", h.URL, h.StatusCode))
+		}
+		fmt.Fprintf(tw, "HTTP Redirect Chain\t%s\n", strings.Join(chainParts, " -> "))
+		wf := info.HTTPTrace.Waterfall
+		if wf.StatusCode > 0 {
+			fmt.Fprintf(tw, "HTTP Timing Waterfall\tDNS: %.2fms | TCP: %.2fms | TLS: %.2fms | TTFB: %.2fms | Total: %.2fms\n",
+				wf.DNSMs, wf.TCPConnectMs, wf.TLSHandshakeMs, wf.TTFBMs, wf.TotalMs)
+		}
+	}
+
 	if info.Metadata != nil {
 		if info.Metadata.PageTitle != "" {
 			fmt.Fprintf(tw, "Page Title\t%s\n", info.Metadata.PageTitle)

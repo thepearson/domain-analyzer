@@ -131,6 +131,7 @@ type ScanRunnerFunc struct {
 	EnumerateSubdomains func(domain string) *analyzer.SubdomainEnumeration
 	InspectMetadata     func(target string) *analyzer.WebsiteMetadata
 	InspectTLS          func(target string) (analyzer.TLSInfo, error)
+	TraceHTTPChain      func(target string) *analyzer.HTTPTraceResult
 }
 
 type cachedFavicon struct {
@@ -188,6 +189,7 @@ func NewDesktopApp(store *storage.Store) *DesktopApp {
 			EnumerateSubdomains: analyzer.EnumerateSubdomains,
 			InspectMetadata:     analyzer.InspectWebsiteMetadata,
 			InspectTLS:          analyzer.InspectTLS,
+			TraceHTTPChain:      analyzer.TraceHTTPChain,
 		},
 	}
 	app.RefreshHistory()
@@ -774,6 +776,51 @@ func (app *DesktopApp) StartTLSAudit(scanID int64) {
 	}()
 }
 
+// StartHTTPTrace traces the HTTP redirect chain and records performance timing waterfall metrics for the current scan.
+func (app *DesktopApp) StartHTTPTrace(scanID int64) {
+	if app.currentScan == nil || app.currentScan.ID != scanID || app.scanning {
+		return
+	}
+	rec := app.currentScan
+	target := rec.Target
+	app.scanning = true
+	app.statusText = fmt.Sprintf("Tracing HTTP redirects & waterfall timing for %s...", target)
+
+	go func() {
+		traceFn := app.runner.TraceHTTPChain
+		if traceFn == nil {
+			traceFn = analyzer.TraceHTTPChain
+		}
+		httpRes := traceFn(target)
+
+		var saveErr error
+		if app.store != nil {
+			if rec.TargetType == analyzer.TargetTypeIP && rec.IPInfo != nil {
+				rec.IPInfo.Lock()
+				rec.IPInfo.HTTPTrace = httpRes
+				rec.IPInfo.Unlock()
+				saveErr = app.store.UpdateIPScan(scanID, rec.IPInfo, "", rec.CheckVulns)
+			} else if rec.DomainInfo != nil {
+				rec.DomainInfo.Lock()
+				rec.DomainInfo.HTTPTrace = httpRes
+				rec.DomainInfo.Unlock()
+				saveErr = app.store.UpdateDomainScan(scanID, rec.DomainInfo, "", rec.CheckVulns)
+			}
+		}
+
+		app.runOnUI(func() {
+			app.scanning = false
+			if saveErr != nil {
+				app.statusText = fmt.Sprintf("HTTP trace save error: %v", saveErr)
+				return
+			}
+			app.statusText = fmt.Sprintf("Completed HTTP trace for %s (%d redirects, %.1f ms total)", target, httpRes.RedirectCount, httpRes.TotalChainMs)
+			app.RefreshHistory()
+			app.SelectScan(scanID)
+		})
+	}()
+}
+
 func (app *DesktopApp) View(c *ui.Context) {
 	if app.textScale <= 0 {
 		app.textScale = 1.0
@@ -1235,7 +1282,10 @@ func (app *DesktopApp) renderDomainDetails(c *ui.Context, t *ui.Theme, scanID in
 		}
 	})
 
-	// 6. Website Metadata & Well-Known Files (robots.txt, security.txt, sitemap.xml)
+	// 6. HTTP Redirect Chain & Performance Timing Waterfall
+	app.renderHTTPTraceCard(c, t, scanID, info.Domain, info.HTTPTrace)
+
+	// 7. Website Metadata & Well-Known Files (robots.txt, security.txt, sitemap.xml)
 	app.renderMetadataCard(c, t, scanID, info.Domain, info.Metadata)
 
 	// 7. Email Security (MX, SPF, DMARC)
@@ -1371,12 +1421,124 @@ func (app *DesktopApp) renderIPDetails(c *ui.Context, t *ui.Theme, scanID int64,
 		}
 	})
 
-	// 5. Website Metadata & Well-Known Files (robots.txt, security.txt, sitemap.xml)
+	// 5. HTTP Redirect Chain & Performance Timing Waterfall
+	app.renderHTTPTraceCard(c, t, scanID, info.IP, info.HTTPTrace)
+
+	// 6. Website Metadata & Well-Known Files (robots.txt, security.txt, sitemap.xml)
 	app.renderMetadataCard(c, t, scanID, info.IP, info.Metadata)
 
 	if len(info.Vulnerabilities) > 0 {
 		app.renderVulnerabilitiesCard(c, t, info.Vulnerabilities)
 	}
+}
+
+func (app *DesktopApp) renderHTTPTraceCard(c *ui.Context, t *ui.Theme, scanID int64, target string, trace *analyzer.HTTPTraceResult) {
+	app.renderSectionCard(c, t, "HTTP Redirect Chain & Performance Timing Waterfall", func() {
+		ui.Row(c).FillWidth().Gap(10).AlignItems(ui.Center).Wrap().Children(func() {
+			btnLabel := "Trace Redirects & Timing"
+			if trace != nil {
+				btnLabel = "Re-trace HTTP ↻"
+			}
+			if ui.PrimaryButton(c, btnLabel).Disabled(app.scanning).Clicked() {
+				app.StartHTTPTrace(scanID)
+			}
+
+			if trace == nil {
+				ui.Text(c, "Click 'Trace Redirects & Timing' to inspect the HTTP → HTTPS redirect chain and phase-by-phase latency waterfall.").
+					FontSize(app.fs(12)).
+					TextColor(t.TextMuted)
+			} else {
+				ui.Badge(c, fmt.Sprintf("%d Redirects", trace.RedirectCount))
+				if trace.FinalStatus > 0 {
+					ui.Badge(c, fmt.Sprintf("Final: HTTP %d", trace.FinalStatus))
+				}
+				if trace.UpgradedHTTPS {
+					ui.Badge(c, "HTTP → HTTPS Upgraded")
+				}
+				ui.Badge(c, fmt.Sprintf("Total Chain: %.1f ms", trace.TotalChainMs))
+			}
+		})
+
+		if trace == nil {
+			return
+		}
+
+		if trace.Error != "" && len(trace.Hops) == 0 {
+			ui.Text(c, "HTTP trace error: "+trace.Error).FontSize(app.fs(12)).TextColor(t.Danger)
+			return
+		}
+
+		// 1. Performance Timing Waterfall Breakdown
+		wf := trace.Waterfall
+		if wf.StatusCode > 0 {
+			ui.Box(c).FillWidth().Padding(8).Radius(6).Border(1, t.Border).Children(func() {
+				ui.Column(c).FillWidth().Gap(6).Children(func() {
+					ui.Row(c).FillWidth().Gap(8).AlignItems(ui.Center).Wrap().Children(func() {
+						ui.Text(c, "Performance Timing Waterfall").FontSize(app.fs(13)).Bold()
+						if wf.Protocol != "" {
+							ui.Badge(c, wf.Protocol)
+						}
+						ui.Badge(c, fmt.Sprintf("HTTP %d", wf.StatusCode))
+						ui.Spacer(c)
+						if wf.URL != "" {
+							ui.Link(c, wf.URL+" ↗", wf.URL)
+						}
+					})
+
+					ui.Row(c).FillWidth().Gap(8).AlignItems(ui.Center).Wrap().Children(func() {
+						ui.Badge(c, fmt.Sprintf("DNS Lookup: %.2f ms", wf.DNSMs))
+						ui.Badge(c, fmt.Sprintf("TCP Connect: %.2f ms", wf.TCPConnectMs))
+						ui.Badge(c, fmt.Sprintf("TLS Handshake: %.2f ms", wf.TLSHandshakeMs))
+						ui.Badge(c, fmt.Sprintf("TTFB: %.2f ms", wf.TTFBMs))
+						ui.Badge(c, fmt.Sprintf("Transfer: %.2f ms", wf.ContentTransferMs))
+						ui.Badge(c, fmt.Sprintf("Total: %.2f ms", wf.TotalMs))
+					})
+				})
+			})
+		}
+
+		// 2. Step-by-Step Redirect Chain
+		if len(trace.Hops) > 0 {
+			ui.Text(c, fmt.Sprintf("Redirect Chain (%d Hop%s):", len(trace.Hops), func() string {
+				if len(trace.Hops) == 1 {
+					return ""
+				}
+				return "s"
+			}())).FontSize(app.fs(12)).TextColor(t.TextMuted)
+
+			for _, h := range trace.Hops {
+				hop := h
+				ui.Box(c).Key(fmt.Sprintf("httphop:%d:%s", hop.Step, hop.URL)).FillWidth().Padding(8).Radius(6).Border(1, t.Border).Children(func() {
+					ui.Column(c).FillWidth().Gap(4).Children(func() {
+						ui.Row(c).FillWidth().Gap(8).AlignItems(ui.Center).Wrap().Children(func() {
+							ui.Badge(c, fmt.Sprintf("Hop #%d", hop.Step))
+							ui.Badge(c, hop.Status)
+							if hop.Protocol != "" {
+								ui.Badge(c, hop.Protocol)
+							}
+							ui.Badge(c, fmt.Sprintf("%.2f ms", hop.TotalMs))
+							if hop.Server != "" {
+								ui.Badge(c, "Server: "+hop.Server)
+							}
+							ui.Spacer(c)
+							ui.Link(c, hop.URL+" ↗", hop.URL)
+						})
+						if hop.Location != "" {
+							ui.Text(c, "  ↳ Redirects to Location: "+hop.Location).FontSize(app.fs(12)).TextColor(t.TextMuted).Selectable()
+						}
+					})
+				})
+			}
+		}
+
+		// 3. Discovered External / Subdomain Redirect Hosts
+		if len(trace.DiscoveredHosts) > 0 {
+			ui.Text(c, "Redirected Hosts (Drill-Down):").FontSize(app.fs(12)).TextColor(t.TextMuted)
+			for _, h := range trace.DiscoveredHosts {
+				app.renderPivotActionRow(c, t, scanID, "Redirect Host", h, "HTTP Redirect")
+			}
+		}
+	})
 }
 
 func (app *DesktopApp) renderTLSGradingCard(c *ui.Context, t *ui.Theme, scanID int64, target string, tlsInfo *analyzer.TLSInfo) {

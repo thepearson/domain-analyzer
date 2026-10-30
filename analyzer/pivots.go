@@ -118,6 +118,13 @@ func ExtractDomainPivots(info *DomainInfo) []PivotTarget {
 		}
 	}
 
+	// 9. HTTP Redirect Chain Hostnames
+	if info.HTTPTrace != nil {
+		for _, h := range info.HTTPTrace.DiscoveredHosts {
+			addDomain(h, "HTTP Redirect")
+		}
+	}
+
 	return pivots
 }
 

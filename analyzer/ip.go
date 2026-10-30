@@ -25,6 +25,7 @@ type IPInfo struct {
 	TLS             TLSInfo           `json:"tls"`
 	Web             WebInfo           `json:"web"`
 	WAF             WAFInfo           `json:"waf"`
+	HTTPTrace       *HTTPTraceResult  `json:"http_trace,omitempty"`
 	Metadata        *WebsiteMetadata  `json:"metadata,omitempty"`
 	Ping            *PingResult       `json:"ping,omitempty"`
 	Traceroute      *TracerouteResult `json:"traceroute,omitempty"`

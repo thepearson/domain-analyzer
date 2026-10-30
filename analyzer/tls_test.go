@@ -55,4 +55,3 @@ func TestEvaluateTLSGrade(t *testing.T) {
 		}
 	})
 }
-

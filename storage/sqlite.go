@@ -226,7 +226,7 @@ func (s *Store) UpdateDomainScan(id int64, info *analyzer.DomainInfo, reason str
 	if info == nil {
 		return fmt.Errorf("domain info is nil")
 	}
-	if info.Ping == nil || info.Traceroute == nil || info.Subdomains == nil || info.Metadata == nil {
+	if info.Ping == nil || info.Traceroute == nil || info.Subdomains == nil || info.Metadata == nil || info.HTTPTrace == nil {
 		if existingRec, err := s.GetScan(id); err == nil && existingRec.DomainInfo != nil {
 			if info.Ping == nil {
 				info.Ping = existingRec.DomainInfo.Ping
@@ -239,6 +239,9 @@ func (s *Store) UpdateDomainScan(id int64, info *analyzer.DomainInfo, reason str
 			}
 			if info.Metadata == nil {
 				info.Metadata = existingRec.DomainInfo.Metadata
+			}
+			if info.HTTPTrace == nil {
+				info.HTTPTrace = existingRec.DomainInfo.HTTPTrace
 			}
 		}
 	}
@@ -331,7 +334,7 @@ func (s *Store) UpdateIPScan(id int64, info *analyzer.IPInfo, reason string, che
 	if info == nil {
 		return fmt.Errorf("ip info is nil")
 	}
-	if !info.PortScanned || info.Ping == nil || info.Traceroute == nil || info.Metadata == nil {
+	if !info.PortScanned || info.Ping == nil || info.Traceroute == nil || info.Metadata == nil || info.HTTPTrace == nil {
 		if existingRec, err := s.GetScan(id); err == nil && existingRec.IPInfo != nil {
 			if !info.PortScanned && existingRec.IPInfo.PortScanned {
 				info.PortScanned = true
@@ -345,6 +348,9 @@ func (s *Store) UpdateIPScan(id int64, info *analyzer.IPInfo, reason string, che
 			}
 			if info.Metadata == nil {
 				info.Metadata = existingRec.IPInfo.Metadata
+			}
+			if info.HTTPTrace == nil {
+				info.HTTPTrace = existingRec.IPInfo.HTTPTrace
 			}
 		}
 	}

@@ -128,6 +128,7 @@ func TestDesktopAppDrillDownAndFeatures(t *testing.T) {
 	subDoneCh := make(chan struct{}, 2)
 	metaDoneCh := make(chan struct{}, 2)
 	tlsDoneCh := make(chan struct{}, 2)
+	httpDoneCh := make(chan struct{}, 2)
 	app.runner = ScanRunnerFunc{
 		AnalyzeDomain: func(domain string, checkVulns bool) *analyzer.DomainInfo {
 			defer func() { doneCh <- struct{}{} }()
@@ -248,9 +249,50 @@ func TestDesktopAppDrillDownAndFeatures(t *testing.T) {
 				SANDomains:          []string{"portal.example.co.nz", "api.example.co.nz"},
 			}, nil
 		},
+		TraceHTTPChain: func(target string) *analyzer.HTTPTraceResult {
+			defer func() { httpDoneCh <- struct{}{} }()
+			return &analyzer.HTTPTraceResult{
+				InitialURL:    "http://portal.example.co.nz",
+				FinalURL:      "https://portal.example.co.nz/login",
+				FinalStatus:   200,
+				UpgradedHTTPS: true,
+				RedirectCount: 1,
+				TotalChainMs:  42.5,
+				Hops: []analyzer.HTTPRedirectHop{
+					{
+						Step:       1,
+						URL:        "http://portal.example.co.nz",
+						StatusCode: 301,
+						Status:     "301 Moved Permanently",
+						Location:   "https://portal.example.co.nz/login",
+						Protocol:   "HTTP/1.1",
+						TotalMs:    12.5,
+					},
+					{
+						Step:       2,
+						URL:        "https://portal.example.co.nz/login",
+						StatusCode: 200,
+						Status:     "200 OK",
+						Protocol:   "HTTP/2.0",
+						TotalMs:    30.0,
+					},
+				},
+				Waterfall: analyzer.HTTPWaterfallTiming{
+					URL:               "https://portal.example.co.nz/login",
+					Protocol:          "HTTP/2.0",
+					StatusCode:        200,
+					DNSMs:             3.2,
+					TCPConnectMs:      8.4,
+					TLSHandshakeMs:    11.1,
+					TTFBMs:            5.8,
+					ContentTransferMs: 1.5,
+					TotalMs:           30.0,
+				},
+			}
+		},
 	}
 
-	tester := ui.NewTester(app.View, 1280, 2600)
+	tester := ui.NewTester(app.View, 1280, 3200)
 
 	// Verify initial seeded scan, .nz WHOIS link, and OWASP challenge links are displayed
 	if !tester.HasText("portal.example.co.nz") {
@@ -428,6 +470,21 @@ func TestDesktopAppDrillDownAndFeatures(t *testing.T) {
 	tester.Frame()
 	if !tester.HasText("Grade: A+") || !tester.HasText("TLS_AES_128_GCM_SHA256 (ALPN: h2)") {
 		t.Errorf("expected TLS Grade A+ and cipher suite to be rendered on scan page")
+	}
+
+	// Run HTTP Redirect Chain & Performance Timing Waterfall trace on the domain scan page
+	if err := tester.Click("Trace Redirects & Timing"); err != nil {
+		t.Fatalf("clicking 'Trace Redirects & Timing' failed: %v", err)
+	}
+	select {
+	case <-httpDoneCh:
+	case <-time.After(3 * time.Second):
+		t.Fatalf("timed out waiting for background HTTP Trace")
+	}
+	time.Sleep(50 * time.Millisecond)
+	tester.Frame()
+	if !tester.HasText("HTTP → HTTPS Upgraded") || !tester.HasText("TTFB: 5.80 ms") {
+		t.Errorf("expected HTTP → HTTPS upgrade badge and waterfall TTFB timing to be rendered on scan page")
 	}
 
 	// Verify favicon persisted across sessions in scan list

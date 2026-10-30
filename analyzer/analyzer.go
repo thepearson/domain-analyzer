@@ -107,6 +107,7 @@ type DomainInfo struct {
 	WAF             WAFInfo               `json:"waf"`
 	TLS             TLSInfo               `json:"tls"`
 	Email           EmailInfo             `json:"email"`
+	HTTPTrace       *HTTPTraceResult      `json:"http_trace,omitempty"`
 	Metadata        *WebsiteMetadata      `json:"metadata,omitempty"`
 	Subdomains      *SubdomainEnumeration `json:"subdomains,omitempty"`
 	Ping            *PingResult           `json:"ping,omitempty"`
@@ -126,7 +127,7 @@ func Analyze(domain string, checkVulns bool) *DomainInfo {
 	}
 
 	var wg sync.WaitGroup
-	wg.Add(12)
+	wg.Add(13)
 	if checkVulns {
 		wg.Add(1)
 	}
@@ -234,7 +235,16 @@ func Analyze(domain string, checkVulns bool) *DomainInfo {
 		info.Unlock()
 	}()
 
-	// 13. Vulnerabilities (Conditional)
+	// 13. HTTP Redirect Chain & Performance Timing Waterfall
+	go func() {
+		defer wg.Done()
+		httpTrace := TraceHTTPChain(domain)
+		info.Lock()
+		info.HTTPTrace = httpTrace
+		info.Unlock()
+	}()
+
+	// 14. Vulnerabilities (Conditional)
 	if checkVulns {
 		go func() {
 			defer wg.Done()
