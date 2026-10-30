@@ -425,4 +425,3 @@ func lookupSubdomainDNS(hostname string) ([]string, string) {
 	}
 	return cleanIPs, cname
 }
-

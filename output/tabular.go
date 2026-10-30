@@ -113,6 +113,30 @@ func (f *TabularFormatter) Format(w io.Writer, info *analyzer.DomainInfo) error 
 		fmt.Fprintf(tw, "Security Headers\tNot checked or failed\n")
 	}
 
+	if info.Metadata != nil {
+		if info.Metadata.PageTitle != "" {
+			fmt.Fprintf(tw, "Page Title\t%s\n", info.Metadata.PageTitle)
+		}
+		if info.Metadata.MetaDescription != "" {
+			fmt.Fprintf(tw, "Meta Description\t%s\n", info.Metadata.MetaDescription)
+		}
+		if info.Metadata.RobotsTxt.Found {
+			fmt.Fprintf(tw, "robots.txt\tFound (%d Disallow, %d Sitemaps)\n", len(info.Metadata.RobotsTxt.DisallowedPaths), len(info.Metadata.RobotsTxt.Sitemaps))
+		} else {
+			fmt.Fprintf(tw, "robots.txt\tNot found\n")
+		}
+		if info.Metadata.SecurityTxt.Found {
+			fmt.Fprintf(tw, "security.txt\tPresent (%s)\n", strings.Join(info.Metadata.SecurityTxt.Contacts, ", "))
+		} else {
+			fmt.Fprintf(tw, "security.txt\tNot found\n")
+		}
+		if info.Metadata.Sitemap.Found {
+			fmt.Fprintf(tw, "sitemap.xml\tFound (%d URLs)\n", info.Metadata.Sitemap.URLCount)
+		} else {
+			fmt.Fprintf(tw, "sitemap.xml\tNot found\n")
+		}
+	}
+
 	// --- WAF SECTION ---
 	fmt.Fprintln(tw, "\n==================================================")
 	fmt.Fprintf(tw, "CATEGORY: WAF\n")

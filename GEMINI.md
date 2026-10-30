@@ -21,6 +21,7 @@ The project is structured into modular packages to ensure scalability and testab
 - **`analyzer`**: Contains the core logic for domain and IP analysis.
   - `Analyze(domain string, checkVulns bool)`: Orchestrates domain sub-modules concurrently using `sync.WaitGroup`.
   - `AnalyzeIP(ip string, checkVulns bool)`: Orchestrates IP reconnaissance (Reverse DNS PTR, IP WHOIS/ASN/CIDR, direct `:443` TLS SAN inspection, direct HTTP/WAF/tech fingerprinting).
+  - `metadata.go`: Website HTML metadata, `/robots.txt`, `/.well-known/security.txt` (RFC 9116), and `/sitemap.xml` inspector (`InspectWebsiteMetadata`).
   - `subdomains.go`: Passive subdomain enumeration via Certificate Transparency logs (`crt.sh`, `CertSpotter`) and wildcard-aware DNS resolution verification (`EnumerateSubdomains`).
   - `netdiag.go`: Ping latency & packet loss check (`RunPing`, ICMP with TCP handshake fallback) and multi-hop network path traceroute (`RunTraceroute`, supporting `traceroute`, `tracepath`, `mtr`, and `tracert` with reverse DNS hop resolution).
   - `ports.go`: Concurrent TCP host port and service banner scanner (`ScanPorts(ip string)`).

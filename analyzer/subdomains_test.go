@@ -47,4 +47,3 @@ func TestParseCertSpotterJSON(t *testing.T) {
 		}
 	}
 }
-

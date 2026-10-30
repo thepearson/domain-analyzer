@@ -129,6 +129,7 @@ type ScanRunnerFunc struct {
 	RunPing             func(target string) *analyzer.PingResult
 	RunTraceroute       func(target string) *analyzer.TracerouteResult
 	EnumerateSubdomains func(domain string) *analyzer.SubdomainEnumeration
+	InspectMetadata     func(target string) *analyzer.WebsiteMetadata
 }
 
 type cachedFavicon struct {
@@ -184,6 +185,7 @@ func NewDesktopApp(store *storage.Store) *DesktopApp {
 			RunPing:             analyzer.RunPing,
 			RunTraceroute:       analyzer.RunTraceroute,
 			EnumerateSubdomains: analyzer.EnumerateSubdomains,
+			InspectMetadata:     analyzer.InspectWebsiteMetadata,
 		},
 	}
 	app.RefreshHistory()
@@ -676,6 +678,51 @@ func (app *DesktopApp) StartSubdomainEnum(scanID int64) {
 	}()
 }
 
+// StartMetadataInspection fetches and parses website metadata, robots.txt, security.txt, and sitemap.xml for the current scan.
+func (app *DesktopApp) StartMetadataInspection(scanID int64) {
+	if app.currentScan == nil || app.currentScan.ID != scanID || app.scanning {
+		return
+	}
+	rec := app.currentScan
+	target := rec.Target
+	app.scanning = true
+	app.statusText = fmt.Sprintf("Inspecting metadata, robots.txt, security.txt & sitemap.xml for %s...", target)
+
+	go func() {
+		metaFn := app.runner.InspectMetadata
+		if metaFn == nil {
+			metaFn = analyzer.InspectWebsiteMetadata
+		}
+		metaRes := metaFn(target)
+
+		var saveErr error
+		if app.store != nil {
+			if rec.TargetType == analyzer.TargetTypeIP && rec.IPInfo != nil {
+				rec.IPInfo.Lock()
+				rec.IPInfo.Metadata = metaRes
+				rec.IPInfo.Unlock()
+				saveErr = app.store.UpdateIPScan(scanID, rec.IPInfo, "", rec.CheckVulns)
+			} else if rec.DomainInfo != nil {
+				rec.DomainInfo.Lock()
+				rec.DomainInfo.Metadata = metaRes
+				rec.DomainInfo.Unlock()
+				saveErr = app.store.UpdateDomainScan(scanID, rec.DomainInfo, "", rec.CheckVulns)
+			}
+		}
+
+		app.runOnUI(func() {
+			app.scanning = false
+			if saveErr != nil {
+				app.statusText = fmt.Sprintf("Metadata save error: %v", saveErr)
+				return
+			}
+			app.statusText = fmt.Sprintf("Completed metadata & well-known files inspection for %s", target)
+			app.RefreshHistory()
+			app.SelectScan(scanID)
+		})
+	}()
+}
+
 func (app *DesktopApp) View(c *ui.Context) {
 	if app.textScale <= 0 {
 		app.textScale = 1.0
@@ -1153,7 +1200,10 @@ func (app *DesktopApp) renderDomainDetails(c *ui.Context, t *ui.Theme, scanID in
 		}
 	})
 
-	// 6. Email Security (MX, SPF, DMARC)
+	// 6. Website Metadata & Well-Known Files (robots.txt, security.txt, sitemap.xml)
+	app.renderMetadataCard(c, t, scanID, info.Domain, info.Metadata)
+
+	// 7. Email Security (MX, SPF, DMARC)
 	app.renderSectionCard(c, t, "Email Providers, SPF & DMARC", func() {
 		if len(info.Email.MailProviders) > 0 {
 			app.renderKeyValue(c, t, "Mail Providers", strings.Join(info.Email.MailProviders, ", "))
@@ -1300,9 +1350,217 @@ func (app *DesktopApp) renderIPDetails(c *ui.Context, t *ui.Theme, scanID int64,
 		}
 	})
 
+	// 5. Website Metadata & Well-Known Files (robots.txt, security.txt, sitemap.xml)
+	app.renderMetadataCard(c, t, scanID, info.IP, info.Metadata)
+
 	if len(info.Vulnerabilities) > 0 {
 		app.renderVulnerabilitiesCard(c, t, info.Vulnerabilities)
 	}
+}
+
+func (app *DesktopApp) renderMetadataCard(c *ui.Context, t *ui.Theme, scanID int64, target string, meta *analyzer.WebsiteMetadata) {
+	app.renderSectionCard(c, t, "Website Metadata & Well-Known Files (robots.txt, security.txt, sitemap.xml)", func() {
+		ui.Row(c).FillWidth().Gap(10).AlignItems(ui.Center).Wrap().Children(func() {
+			btnLabel := "Inspect Metadata"
+			if meta != nil {
+				btnLabel = "Re-inspect Metadata ↻"
+			}
+			if ui.PrimaryButton(c, btnLabel).Disabled(app.scanning).Clicked() {
+				app.StartMetadataInspection(scanID)
+			}
+
+			if meta == nil {
+				ui.Text(c, "Click 'Inspect Metadata' to fetch and parse HTML metadata, /robots.txt, /.well-known/security.txt, and /sitemap.xml.").
+					FontSize(app.fs(12)).
+					TextColor(t.TextMuted)
+			} else {
+				if meta.RobotsTxt.Found {
+					ui.Badge(c, fmt.Sprintf("robots.txt: %d Disallow", len(meta.RobotsTxt.DisallowedPaths)))
+				} else {
+					ui.Badge(c, "robots.txt: Not Found")
+				}
+				if meta.SecurityTxt.Found {
+					ui.Badge(c, "security.txt: Present")
+				} else {
+					ui.Badge(c, "security.txt: Missing")
+				}
+				if meta.Sitemap.Found {
+					ui.Badge(c, fmt.Sprintf("sitemap.xml: %d URLs", meta.Sitemap.URLCount))
+				} else {
+					ui.Badge(c, "sitemap.xml: Not Found")
+				}
+			}
+		})
+
+		if meta == nil {
+			return
+		}
+
+		// 1. HTML Page Metadata
+		if meta.PageTitle != "" {
+			app.renderKeyValue(c, t, "Page Title", meta.PageTitle)
+		}
+		if meta.MetaDescription != "" {
+			app.renderKeyValue(c, t, "Meta Description", meta.MetaDescription)
+		}
+		if meta.MetaGenerator != "" {
+			app.renderKeyValue(c, t, "Meta Generator", meta.MetaGenerator)
+		}
+		if meta.CanonicalURL != "" {
+			app.renderKeyValue(c, t, "Canonical URL", meta.CanonicalURL)
+		}
+
+		// 2. robots.txt Subsection
+		ui.Box(c).FillWidth().Padding(8).Radius(6).Border(1, t.Border).Children(func() {
+			ui.Column(c).FillWidth().Gap(6).Children(func() {
+				ui.Row(c).FillWidth().Gap(8).AlignItems(ui.Center).Wrap().Children(func() {
+					ui.Text(c, "robots.txt").FontSize(app.fs(13)).Bold()
+					if meta.RobotsTxt.Found {
+						ui.Badge(c, "FOUND")
+					} else {
+						ui.Badge(c, "NOT FOUND")
+					}
+					ui.Spacer(c)
+					robotsURL := meta.RobotsTxt.URL
+					if robotsURL == "" && target != "" {
+						robotsURL = "https://" + target + "/robots.txt"
+					}
+					if robotsURL != "" {
+						ui.Link(c, "Open robots.txt ↗", robotsURL)
+					}
+				})
+
+				if meta.RobotsTxt.Found {
+					if len(meta.RobotsTxt.UserAgents) > 0 {
+						app.renderKeyValue(c, t, "User-Agents", strings.Join(meta.RobotsTxt.UserAgents, ", "))
+					}
+					if len(meta.RobotsTxt.DisallowedPaths) > 0 {
+						ui.Row(c).FillWidth().Gap(6).AlignItems(ui.Center).Wrap().Children(func() {
+							ui.Text(c, "Disallowed Paths:").FontSize(app.fs(12)).TextColor(t.TextMuted).MinWidth(140)
+							for _, p := range meta.RobotsTxt.DisallowedPaths {
+								ui.Badge(c, p)
+							}
+						})
+					}
+					if len(meta.RobotsTxt.AllowedPaths) > 0 {
+						app.renderKeyValue(c, t, "Allowed Paths", strings.Join(meta.RobotsTxt.AllowedPaths, ", "))
+					}
+					if len(meta.RobotsTxt.Sitemaps) > 0 {
+						ui.Row(c).FillWidth().Gap(8).AlignItems(ui.Center).Wrap().Children(func() {
+							ui.Text(c, "Declared Sitemaps:").FontSize(app.fs(12)).TextColor(t.TextMuted).MinWidth(140)
+							for _, sm := range meta.RobotsTxt.Sitemaps {
+								ui.Link(c, sm+" ↗", sm)
+							}
+						})
+					}
+				} else {
+					ui.Text(c, "No valid /robots.txt file detected.").FontSize(app.fs(12)).TextColor(t.TextMuted)
+				}
+			})
+		})
+
+		// 3. security.txt (RFC 9116) Subsection
+		ui.Box(c).FillWidth().Padding(8).Radius(6).Border(1, t.Border).Children(func() {
+			ui.Column(c).FillWidth().Gap(6).Children(func() {
+				ui.Row(c).FillWidth().Gap(8).AlignItems(ui.Center).Wrap().Children(func() {
+					ui.Text(c, "security.txt (RFC 9116)").FontSize(app.fs(13)).Bold()
+					if meta.SecurityTxt.Found {
+						ui.Badge(c, "PRESENT")
+					} else {
+						ui.Badge(c, "MISSING")
+					}
+					ui.Spacer(c)
+					secURL := meta.SecurityTxt.URL
+					if secURL == "" && target != "" {
+						secURL = "https://" + target + "/.well-known/security.txt"
+					}
+					if secURL != "" {
+						ui.Link(c, "Open security.txt ↗", secURL)
+					}
+				})
+
+				if meta.SecurityTxt.Found {
+					if len(meta.SecurityTxt.Contacts) > 0 {
+						app.renderKeyValue(c, t, "Security Contacts", strings.Join(meta.SecurityTxt.Contacts, ", "))
+					}
+					if meta.SecurityTxt.Expires != "" {
+						app.renderKeyValue(c, t, "Expires", meta.SecurityTxt.Expires)
+					}
+					if len(meta.SecurityTxt.Policy) > 0 {
+						ui.Row(c).FillWidth().Gap(8).AlignItems(ui.Center).Wrap().Children(func() {
+							ui.Text(c, "Disclosure Policy:").FontSize(app.fs(12)).TextColor(t.TextMuted).MinWidth(140)
+							for _, pol := range meta.SecurityTxt.Policy {
+								if strings.HasPrefix(pol, "http://") || strings.HasPrefix(pol, "https://") {
+									ui.Link(c, pol+" ↗", pol)
+								} else {
+									ui.Text(c, pol).FontSize(app.fs(12)).Selectable()
+								}
+							}
+						})
+					}
+					if len(meta.SecurityTxt.Encryption) > 0 {
+						app.renderKeyValue(c, t, "Encryption (PGP)", strings.Join(meta.SecurityTxt.Encryption, ", "))
+					}
+					if len(meta.SecurityTxt.Acknowledgments) > 0 {
+						app.renderKeyValue(c, t, "Acknowledgments", strings.Join(meta.SecurityTxt.Acknowledgments, ", "))
+					}
+				} else {
+					ui.Text(c, "No RFC 9116 security.txt found at /.well-known/security.txt or /security.txt.").
+						FontSize(app.fs(12)).
+						TextColor(t.TextMuted)
+				}
+			})
+		})
+
+		// 4. sitemap.xml Subsection
+		ui.Box(c).FillWidth().Padding(8).Radius(6).Border(1, t.Border).Children(func() {
+			ui.Column(c).FillWidth().Gap(6).Children(func() {
+				ui.Row(c).FillWidth().Gap(8).AlignItems(ui.Center).Wrap().Children(func() {
+					ui.Text(c, "sitemap.xml").FontSize(app.fs(13)).Bold()
+					if meta.Sitemap.Found {
+						if meta.Sitemap.IsIndex {
+							ui.Badge(c, "SITEMAP INDEX")
+						} else {
+							ui.Badge(c, "URL SET")
+						}
+						ui.Badge(c, fmt.Sprintf("%d Entries", meta.Sitemap.URLCount))
+					} else {
+						ui.Badge(c, "NOT FOUND")
+					}
+					ui.Spacer(c)
+					smURL := meta.Sitemap.URL
+					if smURL == "" && target != "" {
+						smURL = "https://" + target + "/sitemap.xml"
+					}
+					if smURL != "" {
+						ui.Link(c, "Open sitemap.xml ↗", smURL)
+					}
+				})
+
+				if meta.Sitemap.Found {
+					if len(meta.Sitemap.SampleURLs) > 0 {
+						ui.Text(c, fmt.Sprintf("Sample Sitemap Entries (%d of %d):", len(meta.Sitemap.SampleURLs), meta.Sitemap.URLCount)).
+							FontSize(app.fs(12)).
+							TextColor(t.TextMuted)
+						for _, loc := range meta.Sitemap.SampleURLs {
+							locURL := loc
+							ui.Row(c).FillWidth().Gap(8).AlignItems(ui.Center).Children(func() {
+								ui.Link(c, locURL+" ↗", locURL)
+							})
+						}
+					}
+					if len(meta.Sitemap.DiscoveredHosts) > 0 {
+						ui.Text(c, "Hosts Referenced in Sitemap:").FontSize(app.fs(12)).TextColor(t.TextMuted)
+						for _, h := range meta.Sitemap.DiscoveredHosts {
+							app.renderPivotActionRow(c, t, scanID, "Sitemap Host", h, "Sitemap Host")
+						}
+					}
+				} else {
+					ui.Text(c, "No valid XML sitemap detected.").FontSize(app.fs(12)).TextColor(t.TextMuted)
+				}
+			})
+		})
+	})
 }
 
 func (app *DesktopApp) renderSubdomainEnumerationCard(c *ui.Context, t *ui.Theme, scanID int64, info *analyzer.DomainInfo) {

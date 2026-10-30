@@ -126,6 +126,7 @@ func TestDesktopAppDrillDownAndFeatures(t *testing.T) {
 	pingDoneCh := make(chan struct{}, 2)
 	traceDoneCh := make(chan struct{}, 2)
 	subDoneCh := make(chan struct{}, 2)
+	metaDoneCh := make(chan struct{}, 2)
 	app.runner = ScanRunnerFunc{
 		AnalyzeDomain: func(domain string, checkVulns bool) *analyzer.DomainInfo {
 			defer func() { doneCh <- struct{}{} }()
@@ -200,9 +201,34 @@ func TestDesktopAppDrillDownAndFeatures(t *testing.T) {
 				},
 			}
 		},
+		InspectMetadata: func(target string) *analyzer.WebsiteMetadata {
+			defer func() { metaDoneCh <- struct{}{} }()
+			return &analyzer.WebsiteMetadata{
+				PageTitle:       "Example NZ Portal",
+				MetaDescription: "Customer & Partner Portal",
+				RobotsTxt: analyzer.RobotsTxtInfo{
+					Found:           true,
+					URL:             "https://portal.example.co.nz/robots.txt",
+					UserAgents:      []string{"*"},
+					DisallowedPaths: []string{"/admin/secret", "/internal/debug"},
+				},
+				SecurityTxt: analyzer.SecurityTxtInfo{
+					Found:    true,
+					URL:      "https://portal.example.co.nz/.well-known/security.txt",
+					Contacts: []string{"mailto:security@example.co.nz"},
+					Policy:   []string{"https://example.co.nz/security-policy"},
+				},
+				Sitemap: analyzer.SitemapInfo{
+					Found:      true,
+					URL:        "https://portal.example.co.nz/sitemap.xml",
+					URLCount:   2,
+					SampleURLs: []string{"https://portal.example.co.nz/login"},
+				},
+			}
+		},
 	}
 
-	tester := ui.NewTester(app.View, 1280, 1400)
+	tester := ui.NewTester(app.View, 1280, 2200)
 
 	// Verify initial seeded scan, .nz WHOIS link, and OWASP challenge links are displayed
 	if !tester.HasText("portal.example.co.nz") {
@@ -350,6 +376,21 @@ func TestDesktopAppDrillDownAndFeatures(t *testing.T) {
 	tester.Frame()
 	if !tester.HasText("api.example.co.nz") || !tester.HasText("legacy.example.co.nz") {
 		t.Errorf("expected discovered subdomains to be rendered on scan page")
+	}
+
+	// Run Website Metadata & Well-Known Files inspection on the domain scan page
+	if err := tester.Click("Inspect Metadata"); err != nil {
+		t.Fatalf("clicking 'Inspect Metadata' failed: %v", err)
+	}
+	select {
+	case <-metaDoneCh:
+	case <-time.After(3 * time.Second):
+		t.Fatalf("timed out waiting for background Metadata Inspection")
+	}
+	time.Sleep(50 * time.Millisecond)
+	tester.Frame()
+	if !tester.HasText("/admin/secret") || !tester.HasText("mailto:security@example.co.nz") {
+		t.Errorf("expected robots.txt disallow path and security.txt contact to be rendered on scan page")
 	}
 
 	// Verify favicon persisted across sessions in scan list

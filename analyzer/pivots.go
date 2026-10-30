@@ -111,6 +111,13 @@ func ExtractDomainPivots(info *DomainInfo) []PivotTarget {
 		}
 	}
 
+	// 8. Website Metadata & Sitemap Hostnames
+	if info.Metadata != nil {
+		for _, h := range info.Metadata.Sitemap.DiscoveredHosts {
+			addDomain(h, "Sitemap Host")
+		}
+	}
+
 	return pivots
 }
 
