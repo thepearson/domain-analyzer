@@ -121,7 +121,8 @@ func TestDesktopAppDrillDownAndFeatures(t *testing.T) {
 	}
 
 	app := NewDesktopApp(store)
-	doneCh := make(chan struct{}, 2)
+	doneCh := make(chan struct{}, 4)
+	portDoneCh := make(chan struct{}, 2)
 	app.runner = ScanRunnerFunc{
 		AnalyzeDomain: func(domain string, checkVulns bool) *analyzer.DomainInfo {
 			defer func() { doneCh <- struct{}{} }()
@@ -137,6 +138,13 @@ func TestDesktopAppDrillDownAndFeatures(t *testing.T) {
 				Owner:      "Edgecast Networks",
 				ASN:        "AS15133",
 				PTRRecords: []string{"origin.example.co.nz"},
+			}
+		},
+		ScanPorts: func(ip string) []analyzer.PortService {
+			defer func() { portDoneCh <- struct{}{} }()
+			return []analyzer.PortService{
+				{Port: 22, Service: "SSH", State: "open", Banner: "SSH-2.0-OpenSSH_9.6"},
+				{Port: 443, Service: "HTTPS", State: "open"},
 			}
 		},
 	}
@@ -215,12 +223,47 @@ func TestDesktopAppDrillDownAndFeatures(t *testing.T) {
 		t.Errorf("expected ParentScanID = %d, got %d", parentID, app.currentScan.ParentScanID)
 	}
 
+	// Verify child scan tree indicator in sidebar
+	if !tester.HasText("└─") {
+		t.Errorf("expected child scan tree indicator '└─' in sidebar")
+	}
+
+	// Run a host port scan on the IP scan result
+	if err := tester.Click("Scan Host Ports"); err != nil {
+		t.Fatalf("clicking 'Scan Host Ports' failed: %v", err)
+	}
+	select {
+	case <-portDoneCh:
+	case <-time.After(3 * time.Second):
+		t.Fatalf("timed out waiting for background port scan")
+	}
+	time.Sleep(50 * time.Millisecond)
+	tester.Frame()
+
+	if !tester.HasText("TCP/22") || !tester.HasText("SSH-2.0-OpenSSH_9.6") {
+		t.Errorf("expected open port TCP/22 and SSH banner to be rendered after port scan")
+	}
+
+	// Navigate back to Parent Scan and verify its JSON export includes the child IP scan and port scan results
+	if err := tester.Click("← Parent Scan"); err != nil {
+		t.Fatalf("clicking '← Parent Scan' failed: %v", err)
+	}
+	if app.currentScan == nil || app.currentScan.ID != parentID {
+		t.Fatalf("expected to return to parent scan %d", parentID)
+	}
+	if !strings.Contains(app.rawJSONReadOnly, `"child_scans"`) || !strings.Contains(app.rawJSONReadOnly, `"SSH-2.0-OpenSSH_9.6"`) {
+		t.Errorf("expected parent scan JSON export to include child IP scan and port scan data, got:\n%s", app.rawJSONReadOnly)
+	}
+
 	// Verify favicon persisted across sessions in scan list
 	app2 := NewDesktopApp(store)
 	if len(app2.scans) != 2 {
 		t.Fatalf("expected 2 persisted scans across sessions, got %d", len(app2.scans))
 	}
-	if len(app2.scans[1].Favicon) == 0 {
+	if len(app2.scans[0].Favicon) == 0 {
 		t.Errorf("expected persisted favicon bytes on domain scan summary")
+	}
+	if app2.scans[1].Depth != 1 || app2.scans[1].ParentScanID != parentID {
+		t.Errorf("expected second scan in tree to be child IP scan at depth 1, got %+v", app2.scans[1])
 	}
 }

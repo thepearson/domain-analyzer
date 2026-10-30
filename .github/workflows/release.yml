@@ -25,24 +25,30 @@ jobs:
       - name: Set up Go
         uses: actions/setup-go@v5
         with:
-          go-version: '1.25'
+          go-version-file: 'go.mod'
 
-      - name: Build
+      - name: Build CLI and Desktop App
         run: |
-          BINARY_NAME=domain-analyzer
           EXTENSION=""
+          GUI_LDFLAGS=""
           if [ "${{ matrix.goos }}" = "windows" ]; then
             EXTENSION=".exe"
+            GUI_LDFLAGS="-H=windowsgui"
           fi
-          OUTPUT="domain-analyzer-${{ matrix.goos }}-${{ matrix.goarch }}${EXTENSION}"
-          GOOS=${{ matrix.goos }} GOARCH=${{ matrix.goarch }} go build -o "$OUTPUT" .
-          echo "BINARY_PATH=$OUTPUT" >> $GITHUB_ENV
+          CLI_OUTPUT="domain-analyzer-${{ matrix.goos }}-${{ matrix.goarch }}${EXTENSION}"
+          GUI_OUTPUT="domain-analyzer-gui-${{ matrix.goos }}-${{ matrix.goarch }}${EXTENSION}"
+          CGO_ENABLED=0 GOOS=${{ matrix.goos }} GOARCH=${{ matrix.goarch }} go build -o "$CLI_OUTPUT" ./cmd/cli
+          CGO_ENABLED=0 GOOS=${{ matrix.goos }} GOARCH=${{ matrix.goarch }} go build -ldflags="$GUI_LDFLAGS" -o "$GUI_OUTPUT" ./cmd/gui
+          echo "CLI_BINARY_PATH=$CLI_OUTPUT" >> $GITHUB_ENV
+          echo "GUI_BINARY_PATH=$GUI_OUTPUT" >> $GITHUB_ENV
 
-      - name: Upload artifact
+      - name: Upload artifacts
         uses: actions/upload-artifact@v4
         with:
           name: domain-analyzer-${{ matrix.goos }}-${{ matrix.goarch }}
-          path: ${{ env.BINARY_PATH }}
+          path: |
+            ${{ env.CLI_BINARY_PATH }}
+            ${{ env.GUI_BINARY_PATH }}
 
   release:
     name: Create Release

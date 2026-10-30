@@ -21,6 +21,8 @@ The project is structured into modular packages to ensure scalability and testab
 - **`analyzer`**: Contains the core logic for domain and IP analysis.
   - `Analyze(domain string, checkVulns bool)`: Orchestrates domain sub-modules concurrently using `sync.WaitGroup`.
   - `AnalyzeIP(ip string, checkVulns bool)`: Orchestrates IP reconnaissance (Reverse DNS PTR, IP WHOIS/ASN/CIDR, direct `:443` TLS SAN inspection, direct HTTP/WAF/tech fingerprinting).
+  - `ports.go`: Concurrent TCP host port and service banner scanner (`ScanPorts(ip string)`).
+  - `favicon.go`: Website and Wappalyzer technology favicon fetching and ICO-to-PNG conversion.
   - `pivots.go`: Extracts and normalizes actionable domain and IP pivot targets from completed scans.
   - `whois.go`: Registrar and expiration date retrieval.
   - `dns.go`: IP resolution, IP ownership (WHOIS), and mail provider detection.

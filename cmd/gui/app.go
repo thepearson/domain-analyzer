@@ -121,10 +121,11 @@ func buildOWASPChallengeLinks(target string, wafInfo analyzer.WAFInfo) []owaspCh
 	}
 }
 
-// ScanRunnerFunc abstracts domain and IP scanning so unit tests can inject fast mocks if desired.
+// ScanRunnerFunc abstracts domain, IP, and port scanning so unit tests can inject fast mocks if desired.
 type ScanRunnerFunc struct {
 	AnalyzeDomain func(domain string, checkVulns bool) *analyzer.DomainInfo
 	AnalyzeIP     func(ip string, checkVulns bool) *analyzer.IPInfo
+	ScanPorts     func(ip string) []analyzer.PortService
 }
 
 type cachedFavicon struct {
@@ -176,6 +177,7 @@ func NewDesktopApp(store *storage.Store) *DesktopApp {
 		runner: ScanRunnerFunc{
 			AnalyzeDomain: analyzer.Analyze,
 			AnalyzeIP:     analyzer.AnalyzeIP,
+			ScanPorts:     analyzer.ScanPorts,
 		},
 	}
 	app.RefreshHistory()
@@ -414,7 +416,21 @@ func (app *DesktopApp) renderTechStackList(c *ui.Context, t *ui.Theme, web analy
 }
 
 // StartScan launches a domain or IP scan asynchronously and persists the result to SQLite.
+// If parentID > 0 and a child scan for target already exists under parentID, it updates that child scan in place.
+// If parentID == 0, it creates a new top-level scan.
 func (app *DesktopApp) StartScan(rawTarget string, parentID int64, reason string) {
+	app.startScanInternal(0, rawTarget, parentID, reason)
+}
+
+// RescanExisting updates an existing scan record (such as a child scan) in place.
+func (app *DesktopApp) RescanExisting(scan *storage.ScanRecord) {
+	if scan == nil {
+		return
+	}
+	app.startScanInternal(scan.ID, scan.Target, scan.ParentScanID, scan.PivotReason)
+}
+
+func (app *DesktopApp) startScanInternal(updateScanID int64, rawTarget string, parentID int64, reason string) {
 	target := analyzer.NormalizeTarget(rawTarget)
 	if target == "" || app.scanning {
 		return
@@ -444,12 +460,27 @@ func (app *DesktopApp) StartScan(rawTarget string, parentID int64, reason string
 		if isIP {
 			info := app.runner.AnalyzeIP(target, checkVulns)
 			if app.store != nil {
-				savedID, saveErr = app.store.SaveIPScan(info, parentID, reason, checkVulns)
+				if updateScanID > 0 {
+					// Preserve any existing port scan results on this IP scan when re-scanning
+					if existing, err := app.store.GetScan(updateScanID); err == nil && existing.IPInfo != nil && existing.IPInfo.PortScanned {
+						info.PortScanned = true
+						info.OpenPorts = existing.IPInfo.OpenPorts
+					}
+					saveErr = app.store.UpdateIPScan(updateScanID, info, reason, checkVulns)
+					savedID = updateScanID
+				} else {
+					savedID, saveErr = app.store.SaveIPScan(info, parentID, reason, checkVulns)
+				}
 			}
 		} else {
 			info := app.runner.AnalyzeDomain(target, checkVulns)
 			if app.store != nil {
-				savedID, saveErr = app.store.SaveDomainScan(info, parentID, reason, checkVulns)
+				if updateScanID > 0 {
+					saveErr = app.store.UpdateDomainScan(updateScanID, info, reason, checkVulns)
+					savedID = updateScanID
+				} else {
+					savedID, saveErr = app.store.SaveDomainScan(info, parentID, reason, checkVulns)
+				}
 			}
 		}
 
@@ -459,11 +490,51 @@ func (app *DesktopApp) StartScan(rawTarget string, parentID int64, reason string
 				app.statusText = fmt.Sprintf("Scan error: %v", saveErr)
 				return
 			}
+			delete(app.faviconCache, savedID)
 			app.statusText = fmt.Sprintf("Completed scan of %s", target)
 			app.RefreshHistory()
 			if savedID > 0 {
 				app.SelectScan(savedID)
 			}
+		})
+	}()
+}
+
+// StartPortScan runs a TCP port & service scan against the current IP scan and updates the record in SQLite.
+func (app *DesktopApp) StartPortScan(scanID int64, info *analyzer.IPInfo, checkVulns bool) {
+	if info == nil || info.IP == "" || app.scanning {
+		return
+	}
+	targetIP := info.IP
+	app.scanning = true
+	app.statusText = fmt.Sprintf("Scanning TCP ports & services on %s...", targetIP)
+
+	go func() {
+		scanPortsFn := app.runner.ScanPorts
+		if scanPortsFn == nil {
+			scanPortsFn = analyzer.ScanPorts
+		}
+		ports := scanPortsFn(targetIP)
+
+		info.Lock()
+		info.PortScanned = true
+		info.OpenPorts = ports
+		info.Unlock()
+
+		var saveErr error
+		if app.store != nil {
+			saveErr = app.store.UpdateIPScan(scanID, info, "", checkVulns)
+		}
+
+		app.runOnUI(func() {
+			app.scanning = false
+			if saveErr != nil {
+				app.statusText = fmt.Sprintf("Port scan save error: %v", saveErr)
+				return
+			}
+			app.statusText = fmt.Sprintf("Port scan completed on %s (%d open ports)", targetIP, len(ports))
+			app.RefreshHistory()
+			app.SelectScan(scanID)
 		})
 	}()
 }
@@ -564,6 +635,7 @@ func (app *DesktopApp) renderSidebar(c *ui.Context, t *ui.Theme) {
 				for _, item := range app.scans {
 					scanItem := item
 					isSelected := app.currentScan != nil && app.currentScan.ID == scanItem.ID
+					isChild := scanItem.Depth > 0
 
 					cardBg := t.Surface
 					borderCol := t.Border
@@ -571,51 +643,69 @@ func (app *DesktopApp) renderSidebar(c *ui.Context, t *ui.Theme) {
 						borderCol = t.Accent
 					}
 
-					card := ui.Box(c).
-						Key(scanItem.ID).
-						FillWidth().
-						Padding(10).
-						Radius(6).
-						Background(cardBg).
-						Border(1, borderCol).
-						Cursor(ui.CursorPointer)
+					indent := float32(scanItem.Depth) * 18
+					ui.Row(c).Key(scanItem.ID).FillWidth().PaddingStart(indent).Gap(6).AlignItems(ui.Center).Children(func() {
+						if isChild {
+							connector := "├─"
+							if scanItem.IsLastChild {
+								connector = "└─"
+							}
+							ui.Text(c, connector).FontSize(app.fs(13)).Bold().TextColor(t.Accent)
+						}
 
-					card.Children(func() {
-						ui.Column(c).FillWidth().Gap(4).Children(func() {
-							ui.Row(c).FillWidth().Gap(6).AlignItems(ui.Center).Children(func() {
-								app.renderFavicon(c, scanItem.ID, scanItem.Favicon, 16)
+						card := ui.Box(c).
+							Grow(1).
+							Padding(10).
+							Radius(6).
+							Background(cardBg).
+							Border(1, borderCol).
+							Cursor(ui.CursorPointer)
+						if isChild && !isSelected {
+							card.BorderStartWidth(3)
+						}
 
-								typeBadge := "DOMAIN"
-								if scanItem.TargetType == analyzer.TargetTypeIP {
-									typeBadge = "IP"
+						card.Children(func() {
+							ui.Column(c).FillWidth().Gap(4).Children(func() {
+								ui.Row(c).FillWidth().Gap(6).AlignItems(ui.Center).Wrap().Children(func() {
+									app.renderFavicon(c, scanItem.ID, scanItem.Favicon, 16)
+
+									typeBadge := "DOMAIN"
+									if scanItem.TargetType == analyzer.TargetTypeIP {
+										typeBadge = "IP"
+									}
+									ui.Badge(c, typeBadge)
+									ui.Text(c, scanItem.Target).Bold().FontSize(app.fs(13))
+
+									if scanItem.ChildCount > 0 {
+										ui.Spacer(c)
+										ui.Badge(c, fmt.Sprintf("+%d child", scanItem.ChildCount))
+									}
+								})
+
+								if scanItem.PivotReason != "" {
+									ui.Text(c, fmt.Sprintf("Child scan via %s", scanItem.PivotReason)).
+										FontSize(app.fs(11)).
+										TextColor(t.Accent)
 								}
-								ui.Badge(c, typeBadge)
-								ui.Text(c, scanItem.Target).Bold().FontSize(app.fs(13))
+
+								if scanItem.Summary != "" {
+									ui.Text(c, scanItem.Summary).
+										FontSize(app.fs(11)).
+										TextColor(t.TextMuted).
+										MaxLines(1).
+										Ellipsis("...")
+								}
+
+								ui.Text(c, scanItem.CreatedAt.Local().Format("2006-01-02 15:04:05")).
+									FontSize(app.fs(10)).
+									TextColor(t.TextMuted)
 							})
-
-							if scanItem.PivotReason != "" {
-								ui.Text(c, fmt.Sprintf("↳ Pivot via %s", scanItem.PivotReason)).
-									FontSize(app.fs(11)).
-									TextColor(t.Accent)
-							}
-
-							if scanItem.Summary != "" {
-								ui.Text(c, scanItem.Summary).
-									FontSize(app.fs(11)).
-									TextColor(t.TextMuted).
-									MaxLines(1).
-									Ellipsis("...")
-							}
-
-							ui.Text(c, scanItem.CreatedAt.Local().Format("2006-01-02 15:04:05")).
-								FontSize(app.fs(10)).
-								TextColor(t.TextMuted)
 						})
-					})
 
-					if card.Clicked() {
-						app.SelectScan(scanItem.ID)
-					}
+						if card.Clicked() {
+							app.SelectScan(scanItem.ID)
+						}
+					})
 				}
 			})
 		})
@@ -660,7 +750,7 @@ func (app *DesktopApp) renderDetailPane(c *ui.Context, t *ui.Theme) {
 			ui.Spacer(c)
 
 			if ui.Button(c, "Re-scan ↻").Disabled(app.scanning).Clicked() {
-				app.StartScan(scan.Target, scan.ParentScanID, scan.PivotReason)
+				app.RescanExisting(scan)
 			}
 
 			if ui.Button(c, "Copy JSON").Clicked() {
@@ -728,7 +818,19 @@ func (app *DesktopApp) renderPivotActionRow(c *ui.Context, t *ui.Theme, parentSc
 	if !analyzer.IsIPAddress(cleanTarget) {
 		lookupKey = analyzer.CleanDomainTarget(cleanTarget)
 	}
-	existingScanID := app.scannedTargets[lookupKey]
+
+	// Check if this target is already a direct child scan of the current scan
+	var directChildID int64
+	for _, ch := range app.childScans {
+		if strings.EqualFold(strings.TrimSpace(ch.Target), lookupKey) {
+			directChildID = ch.ID
+			break
+		}
+	}
+	existingScanID := directChildID
+	if existingScanID == 0 {
+		existingScanID = app.scannedTargets[lookupKey]
+	}
 
 	ui.Row(c).Key("pivot:" + reason + ":" + lookupKey).FillWidth().Gap(8).AlignItems(ui.Center).Wrap().Children(func() {
 		if label != "" {
@@ -740,7 +842,11 @@ func (app *DesktopApp) renderPivotActionRow(c *ui.Context, t *ui.Theme, parentSc
 		ui.Spacer(c)
 
 		if existingScanID > 0 && (app.currentScan == nil || existingScanID != app.currentScan.ID) {
-			if ui.Button(c, "View Scan ✓").Clicked() {
+			viewLabel := "View Scan ✓"
+			if directChildID > 0 {
+				viewLabel = "View Child Scan ✓"
+			}
+			if ui.Button(c, viewLabel).Clicked() {
 				app.SelectScan(existingScanID)
 			}
 		}
@@ -952,7 +1058,54 @@ func (app *DesktopApp) renderIPDetails(c *ui.Context, t *ui.Theme, scanID int64,
 		}
 	})
 
-	// 2. Reverse DNS (PTR) Hostnames
+	// 2. Port & Service Discovery on IP
+	app.renderSectionCard(c, t, "Port & Service Discovery", func() {
+		ui.Row(c).FillWidth().Gap(10).AlignItems(ui.Center).Wrap().Children(func() {
+			btnLabel := "Scan Host Ports"
+			if info.PortScanned {
+				btnLabel = "Re-scan Host Ports ↻"
+			}
+			if ui.PrimaryButton(c, btnLabel).Disabled(app.scanning).Clicked() {
+				checkVulns := false
+				if app.currentScan != nil {
+					checkVulns = app.currentScan.CheckVulns
+				}
+				app.StartPortScan(scanID, info, checkVulns)
+			}
+
+			if !info.PortScanned {
+				ui.Text(c, "Click 'Scan Host Ports' to probe common TCP ports and identify operating services.").
+					FontSize(app.fs(12)).
+					TextColor(t.TextMuted)
+			} else {
+				ui.Badge(c, fmt.Sprintf("%d Open Ports Found", len(info.OpenPorts)))
+			}
+		})
+
+		if info.PortScanned {
+			if len(info.OpenPorts) == 0 {
+				ui.Text(c, "No open TCP ports detected on common service ports.").
+					FontSize(app.fs(12)).
+					TextColor(t.TextMuted)
+			} else {
+				for _, p := range info.OpenPorts {
+					portItem := p
+					ui.Box(c).Key(fmt.Sprintf("port:%d", portItem.Port)).FillWidth().Padding(8).Radius(6).Border(1, t.Border).Children(func() {
+						ui.Row(c).FillWidth().Gap(10).AlignItems(ui.Center).Wrap().Children(func() {
+							ui.Badge(c, fmt.Sprintf("TCP/%d", portItem.Port))
+							ui.Text(c, portItem.Service).FontSize(app.fs(13)).Bold()
+							ui.Badge(c, strings.ToUpper(portItem.State))
+							if portItem.Banner != "" {
+								ui.Text(c, "Banner: "+portItem.Banner).FontSize(app.fs(12)).TextColor(t.TextMuted).Selectable()
+							}
+						})
+					})
+				}
+			}
+		}
+	})
+
+	// 3. Reverse DNS (PTR) Hostnames
 	app.renderSectionCard(c, t, "Reverse DNS (PTR Hostnames)", func() {
 		if len(info.PTRRecords) == 0 {
 			ui.Text(c, "No PTR records found for this IP address.").FontSize(app.fs(12)).TextColor(t.TextMuted)

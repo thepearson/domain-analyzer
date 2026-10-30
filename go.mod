@@ -9,7 +9,6 @@ require (
 	github.com/likexian/whois-parser v1.24.21
 	github.com/miekg/dns v1.1.72
 	github.com/projectdiscovery/wappalyzergo v0.2.83
-	github.com/projectdiscovery/wappalyzergo v0.2.83
 	golang.org/x/net v0.61.0
 	modernc.org/sqlite v1.61.0
 )

@@ -25,6 +25,8 @@ type IPInfo struct {
 	TLS             TLSInfo         `json:"tls"`
 	Web             WebInfo         `json:"web"`
 	WAF             WAFInfo         `json:"waf"`
+	PortScanned     bool            `json:"port_scanned,omitempty"`
+	OpenPorts       []PortService   `json:"open_ports,omitempty"`
 	Vulnerabilities []Vulnerability `json:"vulnerabilities,omitempty"`
 }
 

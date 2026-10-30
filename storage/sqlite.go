@@ -23,12 +23,37 @@ type ScanSummary struct {
 	Summary      string              `json:"summary"`
 	Favicon      []byte              `json:"favicon,omitempty"`
 	CreatedAt    time.Time           `json:"created_at"`
+	Depth        int                 `json:"depth,omitempty"`
+	IsLastChild  bool                `json:"is_last_child,omitempty"`
+	ChildCount   int                 `json:"child_count,omitempty"`
+}
+
+type ChildScanExport struct {
+	ID          int64                `json:"id"`
+	Target      string               `json:"target"`
+	TargetType  analyzer.TargetType  `json:"target_type"`
+	PivotReason string               `json:"pivot_reason,omitempty"`
+	CreatedAt   string               `json:"created_at"`
+	DomainScan  *analyzer.DomainInfo `json:"domain_scan,omitempty"`
+	IPScan      *analyzer.IPInfo     `json:"ip_scan,omitempty"`
+	ChildScans  []ChildScanExport    `json:"child_scans,omitempty"`
+}
+
+type domainExportWithChildren struct {
+	*analyzer.DomainInfo
+	ChildScans []ChildScanExport `json:"child_scans,omitempty"`
+}
+
+type ipExportWithChildren struct {
+	*analyzer.IPInfo
+	ChildScans []ChildScanExport `json:"child_scans,omitempty"`
 }
 
 type ScanRecord struct {
 	ScanSummary
 	DomainInfo *analyzer.DomainInfo `json:"domain_info,omitempty"`
 	IPInfo     *analyzer.IPInfo     `json:"ip_info,omitempty"`
+	ChildTree  []ChildScanExport    `json:"child_scans,omitempty"`
 	RawJSON    string               `json:"raw_json"`
 }
 
@@ -135,17 +160,38 @@ func buildIPSummary(info *analyzer.IPInfo) string {
 	if len(info.PTRRecords) > 0 {
 		parts = append(parts, "PTR: "+info.PTRRecords[0])
 	}
+	if info.PortScanned {
+		parts = append(parts, fmt.Sprintf("%d open ports", len(info.OpenPorts)))
+	}
 	if len(parts) == 0 {
 		return "IP Reconnaissance"
 	}
 	return strings.Join(parts, " • ")
 }
 
-// SaveDomainScan persists a completed DomainInfo scan and returns its new scan ID.
+// SaveDomainScan persists a completed DomainInfo scan.
+// If parentID > 0 and a child scan for the same target already exists under parentID, it updates that child scan in place.
+// Top-level scans (parentID == 0) always create a new record so multiple top-level scans of the same domain are supported.
 func (s *Store) SaveDomainScan(info *analyzer.DomainInfo, parentID int64, reason string, checkVulns bool) (int64, error) {
 	if info == nil {
 		return 0, fmt.Errorf("domain info is nil")
 	}
+	target := strings.ToLower(strings.TrimSpace(info.Domain))
+
+	if parentID > 0 {
+		var existingID int64
+		err := s.db.QueryRow(
+			`SELECT id FROM scans WHERE parent_scan_id = ? AND LOWER(target) = ? LIMIT 1`,
+			parentID, target,
+		).Scan(&existingID)
+		if err == nil && existingID > 0 {
+			if err := s.UpdateDomainScan(existingID, info, reason, checkVulns); err != nil {
+				return 0, err
+			}
+			return existingID, nil
+		}
+	}
+
 	favicon := info.Web.Favicon
 	info.Web.Favicon = nil
 	payload, err := json.MarshalIndent(info, "", "  ")
@@ -154,7 +200,6 @@ func (s *Store) SaveDomainScan(info *analyzer.DomainInfo, parentID int64, reason
 		return 0, fmt.Errorf("marshaling domain info: %w", err)
 	}
 
-	target := strings.ToLower(strings.TrimSpace(info.Domain))
 	summary := buildDomainSummary(info)
 	createdAt := time.Now().UTC().Format(time.RFC3339Nano)
 	vulnsInt := 0
@@ -171,6 +216,129 @@ func (s *Store) SaveDomainScan(info *analyzer.DomainInfo, parentID int64, reason
 		return 0, fmt.Errorf("inserting domain scan: %w", err)
 	}
 	return res.LastInsertId()
+}
+
+// UpdateDomainScan updates an existing domain scan record in place.
+func (s *Store) UpdateDomainScan(id int64, info *analyzer.DomainInfo, reason string, checkVulns bool) error {
+	if info == nil {
+		return fmt.Errorf("domain info is nil")
+	}
+	favicon := info.Web.Favicon
+	info.Web.Favicon = nil
+	payload, err := json.MarshalIndent(info, "", "  ")
+	info.Web.Favicon = favicon
+	if err != nil {
+		return fmt.Errorf("marshaling domain info: %w", err)
+	}
+
+	summary := buildDomainSummary(info)
+	createdAt := time.Now().UTC().Format(time.RFC3339Nano)
+	vulnsInt := 0
+	if checkVulns {
+		vulnsInt = 1
+	}
+
+	if reason != "" {
+		_, err = s.db.Exec(
+			`UPDATE scans SET pivot_reason = ?, check_vulns = ?, summary = ?, favicon = ?, payload_json = ?, created_at = ? WHERE id = ?`,
+			reason, vulnsInt, summary, favicon, string(payload), createdAt, id,
+		)
+	} else {
+		_, err = s.db.Exec(
+			`UPDATE scans SET check_vulns = ?, summary = ?, favicon = ?, payload_json = ?, created_at = ? WHERE id = ?`,
+			vulnsInt, summary, favicon, string(payload), createdAt, id,
+		)
+	}
+	return err
+}
+
+// SaveIPScan persists a completed IPInfo scan.
+// If parentID > 0 and a child scan for the same IP already exists under parentID, it updates that child scan in place.
+func (s *Store) SaveIPScan(info *analyzer.IPInfo, parentID int64, reason string, checkVulns bool) (int64, error) {
+	if info == nil {
+		return 0, fmt.Errorf("ip info is nil")
+	}
+	target := strings.TrimSpace(info.IP)
+
+	if parentID > 0 {
+		var existingID int64
+		err := s.db.QueryRow(
+			`SELECT id FROM scans WHERE parent_scan_id = ? AND LOWER(target) = ? LIMIT 1`,
+			parentID, strings.ToLower(target),
+		).Scan(&existingID)
+		if err == nil && existingID > 0 {
+			// Preserve existing port scan results if the new IP scan did not run a port scan
+			if !info.PortScanned {
+				if existingRec, err := s.GetScan(existingID); err == nil && existingRec.IPInfo != nil && existingRec.IPInfo.PortScanned {
+					info.PortScanned = true
+					info.OpenPorts = existingRec.IPInfo.OpenPorts
+				}
+			}
+			if err := s.UpdateIPScan(existingID, info, reason, checkVulns); err != nil {
+				return 0, err
+			}
+			return existingID, nil
+		}
+	}
+
+	favicon := info.Web.Favicon
+	info.Web.Favicon = nil
+	payload, err := json.MarshalIndent(info, "", "  ")
+	info.Web.Favicon = favicon
+	if err != nil {
+		return 0, fmt.Errorf("marshaling ip info: %w", err)
+	}
+
+	summary := buildIPSummary(info)
+	createdAt := time.Now().UTC().Format(time.RFC3339Nano)
+	vulnsInt := 0
+	if checkVulns {
+		vulnsInt = 1
+	}
+
+	res, err := s.db.Exec(
+		`INSERT INTO scans (target, target_type, parent_scan_id, pivot_reason, check_vulns, summary, favicon, payload_json, created_at)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		target, string(analyzer.TargetTypeIP), parentID, reason, vulnsInt, summary, favicon, string(payload), createdAt,
+	)
+	if err != nil {
+		return 0, fmt.Errorf("inserting ip scan: %w", err)
+	}
+	return res.LastInsertId()
+}
+
+// UpdateIPScan updates an existing IP scan record in place (e.g., when rescanning a child IP or saving port scan results).
+func (s *Store) UpdateIPScan(id int64, info *analyzer.IPInfo, reason string, checkVulns bool) error {
+	if info == nil {
+		return fmt.Errorf("ip info is nil")
+	}
+	favicon := info.Web.Favicon
+	info.Web.Favicon = nil
+	payload, err := json.MarshalIndent(info, "", "  ")
+	info.Web.Favicon = favicon
+	if err != nil {
+		return fmt.Errorf("marshaling ip info: %w", err)
+	}
+
+	summary := buildIPSummary(info)
+	createdAt := time.Now().UTC().Format(time.RFC3339Nano)
+	vulnsInt := 0
+	if checkVulns {
+		vulnsInt = 1
+	}
+
+	if reason != "" {
+		_, err = s.db.Exec(
+			`UPDATE scans SET pivot_reason = ?, check_vulns = ?, summary = ?, favicon = ?, payload_json = ?, created_at = ? WHERE id = ?`,
+			reason, vulnsInt, summary, favicon, string(payload), createdAt, id,
+		)
+	} else {
+		_, err = s.db.Exec(
+			`UPDATE scans SET check_vulns = ?, summary = ?, favicon = ?, payload_json = ?, created_at = ? WHERE id = ?`,
+			vulnsInt, summary, favicon, string(payload), createdAt, id,
+		)
+	}
+	return err
 }
 
 // enrichWebTechDetails ensures every detected technology has its TechDetail entry and Website URL populated.
@@ -213,64 +381,99 @@ func cleanWebInfoForRawJSON(web analyzer.WebInfo) analyzer.WebInfo {
 	return cleaned
 }
 
-// SaveIPScan persists a completed IPInfo scan and returns its new scan ID.
-func (s *Store) SaveIPScan(info *analyzer.IPInfo, parentID int64, reason string, checkVulns bool) (int64, error) {
-	if info == nil {
-		return 0, fmt.Errorf("ip info is nil")
-	}
-	favicon := info.Web.Favicon
-	info.Web.Favicon = nil
-	payload, err := json.MarshalIndent(info, "", "  ")
-	info.Web.Favicon = favicon
-	if err != nil {
-		return 0, fmt.Errorf("marshaling ip info: %w", err)
-	}
-
-	target := strings.TrimSpace(info.IP)
-	summary := buildIPSummary(info)
-	createdAt := time.Now().UTC().Format(time.RFC3339Nano)
-	vulnsInt := 0
-	if checkVulns {
-		vulnsInt = 1
-	}
-
-	res, err := s.db.Exec(
-		`INSERT INTO scans (target, target_type, parent_scan_id, pivot_reason, check_vulns, summary, favicon, payload_json, created_at)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-		target, string(analyzer.TargetTypeIP), parentID, reason, vulnsInt, summary, favicon, string(payload), createdAt,
-	)
-	if err != nil {
-		return 0, fmt.Errorf("inserting ip scan: %w", err)
-	}
-	return res.LastInsertId()
-}
-
-// ListScans returns all saved scans ordered from newest to oldest, optionally filtered by target or summary text.
+// ListScans returns saved scans arranged as a hierarchical parent -> child -> grandchild tree.
+// Top-level scans are ordered newest to oldest, with their child scans nested immediately underneath.
 func (s *Store) ListScans(searchFilter string) ([]ScanSummary, error) {
-	filter := strings.TrimSpace(searchFilter)
-	var rows *sql.Rows
-	var err error
-	if filter == "" {
-		rows, err = s.db.Query(
-			`SELECT id, target, target_type, parent_scan_id, pivot_reason, check_vulns, summary, favicon, created_at
-			 FROM scans ORDER BY id DESC`,
-		)
-	} else {
-		like := "%" + strings.ToLower(filter) + "%"
-		rows, err = s.db.Query(
-			`SELECT id, target, target_type, parent_scan_id, pivot_reason, check_vulns, summary, favicon, created_at
-			 FROM scans
-			 WHERE LOWER(target) LIKE ? OR LOWER(summary) LIKE ? OR LOWER(pivot_reason) LIKE ?
-			 ORDER BY id DESC`,
-			like, like, like,
-		)
-	}
+	rows, err := s.db.Query(
+		`SELECT id, target, target_type, parent_scan_id, pivot_reason, check_vulns, summary, favicon, created_at
+		 FROM scans ORDER BY id DESC`,
+	)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
 
-	return scanSummariesFromRows(rows)
+	all, err := scanSummariesFromRows(rows)
+	if err != nil {
+		return nil, err
+	}
+
+	byID := make(map[int64]ScanSummary, len(all))
+	childrenByParent := make(map[int64][]ScanSummary)
+	for _, item := range all {
+		byID[item.ID] = item
+	}
+
+	var roots []ScanSummary
+	for _, item := range all {
+		if item.ParentScanID > 0 {
+			if _, parentExists := byID[item.ParentScanID]; parentExists {
+				// Preserve chronological or newest order under parent
+				childrenByParent[item.ParentScanID] = append(childrenByParent[item.ParentScanID], item)
+				continue
+			}
+		}
+		roots = append(roots, item)
+	}
+
+	filter := strings.ToLower(strings.TrimSpace(searchFilter))
+	matchesFilter := func(item ScanSummary) bool {
+		if filter == "" {
+			return true
+		}
+		return strings.Contains(strings.ToLower(item.Target), filter) ||
+			strings.Contains(strings.ToLower(item.Summary), filter) ||
+			strings.Contains(strings.ToLower(item.PivotReason), filter)
+	}
+
+	var subtreeMatches func(item ScanSummary) bool
+	subtreeMatches = func(item ScanSummary) bool {
+		if matchesFilter(item) {
+			return true
+		}
+		for _, ch := range childrenByParent[item.ID] {
+			if subtreeMatches(ch) {
+				return true
+			}
+		}
+		return false
+	}
+
+	var ordered []ScanSummary
+	visited := make(map[int64]bool)
+
+	var walk func(node ScanSummary, depth int, isLast bool)
+	walk = func(node ScanSummary, depth int, isLast bool) {
+		if visited[node.ID] {
+			return
+		}
+		visited[node.ID] = true
+
+		kids := childrenByParent[node.ID]
+		var visibleKids []ScanSummary
+		for _, k := range kids {
+			if subtreeMatches(k) {
+				visibleKids = append(visibleKids, k)
+			}
+		}
+
+		node.Depth = depth
+		node.IsLastChild = isLast
+		node.ChildCount = len(kids)
+		ordered = append(ordered, node)
+
+		for i, k := range visibleKids {
+			walk(k, depth+1, i == len(visibleKids)-1)
+		}
+	}
+
+	for _, root := range roots {
+		if subtreeMatches(root) {
+			walk(root, 0, false)
+		}
+	}
+
+	return ordered, nil
 }
 
 // GetChildScans returns all scans that were drilled down directly from parentID.
@@ -280,7 +483,7 @@ func (s *Store) GetChildScans(parentID int64) ([]ScanSummary, error) {
 	}
 	rows, err := s.db.Query(
 		`SELECT id, target, target_type, parent_scan_id, pivot_reason, check_vulns, summary, favicon, created_at
-		 FROM scans WHERE parent_scan_id = ? ORDER BY id DESC`,
+		 FROM scans WHERE parent_scan_id = ? ORDER BY id ASC`,
 		parentID,
 	)
 	if err != nil {
@@ -321,7 +524,78 @@ func scanSummariesFromRows(rows *sql.Rows) ([]ScanSummary, error) {
 	return out, rows.Err()
 }
 
-// GetScan retrieves the full ScanRecord (including deserialized DomainInfo or IPInfo) by ID.
+// buildChildExportTree recursively loads all child and grandchild scans under parentID for JSON export.
+func (s *Store) buildChildExportTree(parentID int64, visited map[int64]bool) ([]ChildScanExport, error) {
+	if visited[parentID] {
+		return nil, nil
+	}
+	visited[parentID] = true
+
+	rows, err := s.db.Query(
+		`SELECT id, target, target_type, pivot_reason, payload_json, created_at
+		 FROM scans WHERE parent_scan_id = ? ORDER BY id ASC`,
+		parentID,
+	)
+	if err != nil {
+		return nil, err
+	}
+
+	type rawChildRow struct {
+		id          int64
+		target      string
+		targetType  string
+		pivotReason string
+		payloadJSON string
+		createdAt   string
+	}
+	var rawRows []rawChildRow
+	for rows.Next() {
+		var r rawChildRow
+		if err := rows.Scan(&r.id, &r.target, &r.targetType, &r.pivotReason, &r.payloadJSON, &r.createdAt); err != nil {
+			rows.Close()
+			return nil, err
+		}
+		rawRows = append(rawRows, r)
+	}
+	rows.Close()
+
+	var exports []ChildScanExport
+	for _, r := range rawRows {
+		node := ChildScanExport{
+			ID:          r.id,
+			Target:      r.target,
+			TargetType:  analyzer.TargetType(r.targetType),
+			PivotReason: r.pivotReason,
+			CreatedAt:   r.createdAt,
+		}
+
+		if node.TargetType == analyzer.TargetTypeIP {
+			var ipInfo analyzer.IPInfo
+			if err := json.Unmarshal([]byte(r.payloadJSON), &ipInfo); err == nil {
+				enrichWebTechDetails(&ipInfo.Web)
+				ipInfo.Web = cleanWebInfoForRawJSON(ipInfo.Web)
+				node.IPScan = &ipInfo
+			}
+		} else {
+			var domInfo analyzer.DomainInfo
+			if err := json.Unmarshal([]byte(r.payloadJSON), &domInfo); err == nil {
+				enrichWebTechDetails(&domInfo.Web)
+				domInfo.Web = cleanWebInfoForRawJSON(domInfo.Web)
+				node.DomainScan = &domInfo
+			}
+		}
+
+		grandchildren, err := s.buildChildExportTree(r.id, visited)
+		if err == nil && len(grandchildren) > 0 {
+			node.ChildScans = grandchildren
+		}
+		exports = append(exports, node)
+	}
+
+	return exports, nil
+}
+
+// GetScan retrieves the full ScanRecord (including deserialized DomainInfo or IPInfo and recursive child_scans JSON) by ID.
 func (s *Store) GetScan(id int64) (*ScanRecord, error) {
 	var rec ScanRecord
 	var targetType string
@@ -354,6 +628,10 @@ func (s *Store) GetScan(id int64) (*ScanRecord, error) {
 		rec.CreatedAt = t
 	}
 
+	visited := make(map[int64]bool)
+	childExports, _ := s.buildChildExportTree(rec.ID, visited)
+	rec.ChildTree = childExports
+
 	if rec.TargetType == analyzer.TargetTypeIP {
 		var ipInfo analyzer.IPInfo
 		if err := json.Unmarshal([]byte(rec.RawJSON), &ipInfo); err != nil {
@@ -365,7 +643,11 @@ func (s *Store) GetScan(id int64) (*ScanRecord, error) {
 
 		displayCopy := ipInfo
 		displayCopy.Web = cleanWebInfoForRawJSON(ipInfo.Web)
-		if indented, err := json.MarshalIndent(&displayCopy, "", "  "); err == nil {
+		exportObj := ipExportWithChildren{
+			IPInfo:     &displayCopy,
+			ChildScans: childExports,
+		}
+		if indented, err := json.MarshalIndent(exportObj, "", "  "); err == nil {
 			rec.RawJSON = string(indented)
 		}
 	} else {
@@ -379,7 +661,11 @@ func (s *Store) GetScan(id int64) (*ScanRecord, error) {
 
 		displayCopy := domInfo
 		displayCopy.Web = cleanWebInfoForRawJSON(domInfo.Web)
-		if indented, err := json.MarshalIndent(&displayCopy, "", "  "); err == nil {
+		exportObj := domainExportWithChildren{
+			DomainInfo: &displayCopy,
+			ChildScans: childExports,
+		}
+		if indented, err := json.MarshalIndent(exportObj, "", "  "); err == nil {
 			rec.RawJSON = string(indented)
 		}
 	}
@@ -407,8 +693,12 @@ func (s *Store) LatestScansByTarget() (map[string]int64, error) {
 	return res, rows.Err()
 }
 
-// DeleteScan removes a scan by ID.
+// DeleteScan removes a scan and any nested child scans beneath it.
 func (s *Store) DeleteScan(id int64) error {
+	children, _ := s.GetChildScans(id)
+	for _, ch := range children {
+		_ = s.DeleteScan(ch.ID)
+	}
 	_, err := s.db.Exec(`DELETE FROM scans WHERE id = ?`, id)
 	return err
 }
