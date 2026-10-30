@@ -52,6 +52,9 @@ func (f *TabularFormatter) Format(w io.Writer, info *analyzer.DomainInfo) error 
 	fmt.Fprintf(tw, "CATEGORY: EMAIL\n")
 	fmt.Fprintln(tw, "==================================================")
 	fmt.Fprintf(tw, "Mail Providers\t%s\n", strings.Join(info.Email.MailProviders, ", "))
+	if len(info.Email.MXRecords) > 0 {
+		fmt.Fprintf(tw, "MX Records\t%s\n", strings.Join(info.Email.MXRecords, ", "))
+	}
 
 	if info.Email.SPFRecord != nil {
 		fmt.Fprintf(tw, "SPF Status\t[%s] %s\n", info.Email.SPFRecord.Status, info.Email.SPFRecord.Description)
@@ -69,6 +72,38 @@ func (f *TabularFormatter) Format(w io.Writer, info *analyzer.DomainInfo) error 
 		fmt.Fprintf(tw, "DMARC Raw\t%s\n", info.Email.DMARCRecord.Raw)
 	} else {
 		fmt.Fprintf(tw, "DMARC Record\tNot found\n")
+	}
+
+	if len(info.Email.DKIMRecords) > 0 {
+		var dkimSummaries []string
+		for _, d := range info.Email.DKIMRecords {
+			label := fmt.Sprintf("%s (%s)", d.Selector, strings.ToUpper(d.KeyType))
+			if d.CNAME != "" {
+				label += " -> " + d.CNAME
+			}
+			dkimSummaries = append(dkimSummaries, label)
+		}
+		fmt.Fprintf(tw, "DKIM Selectors\t%s\n", strings.Join(dkimSummaries, ", "))
+	} else {
+		fmt.Fprintf(tw, "DKIM Selectors\tNone discovered on common selectors\n")
+	}
+
+	if info.Email.MTASTS != nil && info.Email.MTASTS.Found {
+		fmt.Fprintf(tw, "MTA-STS\tMode: %s (Max-Age: %s, ID: %s)\n", info.Email.MTASTS.Mode, info.Email.MTASTS.MaxAge, info.Email.MTASTS.ID)
+	} else {
+		fmt.Fprintf(tw, "MTA-STS\tNot configured\n")
+	}
+
+	if info.Email.TLSRPT != nil && info.Email.TLSRPT.Found {
+		fmt.Fprintf(tw, "SMTP TLS-RPT\t%s\n", strings.Join(info.Email.TLSRPT.Endpoints, ", "))
+	} else {
+		fmt.Fprintf(tw, "SMTP TLS-RPT\tNot configured\n")
+	}
+
+	if info.Email.BIMI != nil && info.Email.BIMI.Found {
+		fmt.Fprintf(tw, "BIMI Brand Logo\t%s (VMC: %s)\n", info.Email.BIMI.LogoURL, info.Email.BIMI.AuthorityURL)
+	} else {
+		fmt.Fprintf(tw, "BIMI Record\tNot configured\n")
 	}
 	// --- SSL/TLS SECTION ---
 	fmt.Fprintln(tw, "\n==================================================")

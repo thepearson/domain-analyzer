@@ -90,9 +90,15 @@ type TLSInfo struct {
 }
 
 type EmailInfo struct {
-	MailProviders []string      `json:"mail_providers,omitempty"`
-	SPFRecord     *SPFDetails   `json:"spf,omitempty"`
-	DMARCRecord   *DMARCDetails `json:"dmarc,omitempty"`
+	DeepChecked   bool               `json:"deep_checked,omitempty"`
+	MXRecords     []string           `json:"mx_records,omitempty"`
+	MailProviders []string           `json:"mail_providers,omitempty"`
+	SPFRecord     *SPFDetails        `json:"spf,omitempty"`
+	DMARCRecord   *DMARCDetails      `json:"dmarc,omitempty"`
+	DKIMRecords   []DKIMSelectorInfo `json:"dkim_records,omitempty"`
+	MTASTS        *MTASTSDetails     `json:"mta_sts,omitempty"`
+	TLSRPT        *TLSRPTDetails     `json:"tls_rpt,omitempty"`
+	BIMI          *BIMIDetails       `json:"bimi,omitempty"`
 }
 
 type DomainInfo struct {
@@ -112,6 +118,7 @@ type DomainInfo struct {
 	Subdomains      *SubdomainEnumeration `json:"subdomains,omitempty"`
 	Ping            *PingResult           `json:"ping,omitempty"`
 	Traceroute      *TracerouteResult     `json:"traceroute,omitempty"`
+	VulnsChecked    bool                  `json:"vulns_checked,omitempty"`
 	Vulnerabilities []Vulnerability       `json:"vulnerabilities,omitempty"`
 }
 

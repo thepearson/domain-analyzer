@@ -42,4 +42,3 @@ func TestResolveRedirectLocationAndSingleMeasure(t *testing.T) {
 		t.Errorf("expected HTTP 200 on hop2, got %+v / %+v", hop2, wf2)
 	}
 }
-

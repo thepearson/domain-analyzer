@@ -123,15 +123,17 @@ func buildOWASPChallengeLinks(target string, wafInfo analyzer.WAFInfo) []owaspCh
 
 // ScanRunnerFunc abstracts domain, IP, port, ping, and traceroute operations so unit tests can inject fast mocks if desired.
 type ScanRunnerFunc struct {
-	AnalyzeDomain       func(domain string, checkVulns bool) *analyzer.DomainInfo
-	AnalyzeIP           func(ip string, checkVulns bool) *analyzer.IPInfo
-	ScanPorts           func(ip string) []analyzer.PortService
-	RunPing             func(target string) *analyzer.PingResult
-	RunTraceroute       func(target string) *analyzer.TracerouteResult
-	EnumerateSubdomains func(domain string) *analyzer.SubdomainEnumeration
-	InspectMetadata     func(target string) *analyzer.WebsiteMetadata
-	InspectTLS          func(target string) (analyzer.TLSInfo, error)
-	TraceHTTPChain      func(target string) *analyzer.HTTPTraceResult
+	AnalyzeDomain         func(domain string, checkVulns bool) *analyzer.DomainInfo
+	AnalyzeIP             func(ip string, checkVulns bool) *analyzer.IPInfo
+	ScanPorts             func(ip string) []analyzer.PortService
+	RunPing               func(target string) *analyzer.PingResult
+	RunTraceroute         func(target string) *analyzer.TracerouteResult
+	EnumerateSubdomains   func(domain string) *analyzer.SubdomainEnumeration
+	InspectMetadata       func(target string) *analyzer.WebsiteMetadata
+	InspectTLS            func(target string) (analyzer.TLSInfo, error)
+	TraceHTTPChain        func(target string) *analyzer.HTTPTraceResult
+	InspectEmail          func(domain string) analyzer.EmailInfo
+	LookupVulnerabilities func(details []analyzer.TechDetail) ([]analyzer.Vulnerability, error)
 }
 
 type cachedFavicon struct {
@@ -181,15 +183,17 @@ func NewDesktopApp(store *storage.Store) *DesktopApp {
 		techFaviconCache: make(map[string]cachedFavicon),
 		techFetching:     make(map[string]bool),
 		runner: ScanRunnerFunc{
-			AnalyzeDomain:       analyzer.Analyze,
-			AnalyzeIP:           analyzer.AnalyzeIP,
-			ScanPorts:           analyzer.ScanPorts,
-			RunPing:             analyzer.RunPing,
-			RunTraceroute:       analyzer.RunTraceroute,
-			EnumerateSubdomains: analyzer.EnumerateSubdomains,
-			InspectMetadata:     analyzer.InspectWebsiteMetadata,
-			InspectTLS:          analyzer.InspectTLS,
-			TraceHTTPChain:      analyzer.TraceHTTPChain,
+			AnalyzeDomain:         analyzer.Analyze,
+			AnalyzeIP:             analyzer.AnalyzeIP,
+			ScanPorts:             analyzer.ScanPorts,
+			RunPing:               analyzer.RunPing,
+			RunTraceroute:         analyzer.RunTraceroute,
+			EnumerateSubdomains:   analyzer.EnumerateSubdomains,
+			InspectMetadata:       analyzer.InspectWebsiteMetadata,
+			InspectTLS:            analyzer.InspectTLS,
+			TraceHTTPChain:        analyzer.TraceHTTPChain,
+			InspectEmail:          analyzer.InspectEmailDeliverability,
+			LookupVulnerabilities: analyzer.LookupVulnerabilities,
 		},
 	}
 	app.RefreshHistory()
@@ -821,6 +825,106 @@ func (app *DesktopApp) StartHTTPTrace(scanID int64) {
 	}()
 }
 
+// StartEmailDeepDive runs a deep-dive email deliverability & authentication audit (MX, SPF, DMARC, DKIM, MTA-STS, TLS-RPT, BIMI).
+func (app *DesktopApp) StartEmailDeepDive(scanID int64) {
+	if app.currentScan == nil || app.currentScan.ID != scanID || app.currentScan.DomainInfo == nil || app.scanning {
+		return
+	}
+	rec := app.currentScan
+	domain := rec.DomainInfo.ApexDomain
+	if domain == "" {
+		domain = rec.DomainInfo.Domain
+	}
+	app.scanning = true
+	app.statusText = fmt.Sprintf("Auditing email deliverability & authentication (SPF, DMARC, DKIM, MTA-STS, TLS-RPT, BIMI) for %s...", domain)
+
+	go func() {
+		emailFn := app.runner.InspectEmail
+		if emailFn == nil {
+			emailFn = analyzer.InspectEmailDeliverability
+		}
+		emailRes := emailFn(domain)
+
+		var saveErr error
+		if app.store != nil && rec.DomainInfo != nil {
+			rec.DomainInfo.Lock()
+			rec.DomainInfo.Email = emailRes
+			rec.DomainInfo.Unlock()
+			saveErr = app.store.UpdateDomainScan(scanID, rec.DomainInfo, "", rec.CheckVulns)
+		}
+
+		app.runOnUI(func() {
+			app.scanning = false
+			if saveErr != nil {
+				app.statusText = fmt.Sprintf("Email audit save error: %v", saveErr)
+				return
+			}
+			app.statusText = fmt.Sprintf("Completed email deliverability audit for %s (%d DKIM selectors)", domain, len(emailRes.DKIMRecords))
+			app.RefreshHistory()
+			app.SelectScan(scanID)
+		})
+	}()
+}
+
+// StartVulnerabilityCheck queries the NVD database for known CVEs affecting the detected web technology stack.
+func (app *DesktopApp) StartVulnerabilityCheck(scanID int64) {
+	if app.currentScan == nil || app.currentScan.ID != scanID || app.scanning {
+		return
+	}
+	rec := app.currentScan
+	target := rec.Target
+
+	var details []analyzer.TechDetail
+	if rec.TargetType == analyzer.TargetTypeIP && rec.IPInfo != nil {
+		details = rec.IPInfo.Web.TechDetails
+	} else if rec.DomainInfo != nil {
+		details = rec.DomainInfo.Web.TechDetails
+	}
+
+	app.scanning = true
+	app.statusText = fmt.Sprintf("Checking NVD CVE database for detected technologies on %s...", target)
+
+	go func() {
+		vulnFn := app.runner.LookupVulnerabilities
+		if vulnFn == nil {
+			vulnFn = analyzer.LookupVulnerabilities
+		}
+		vulns, vulnErr := vulnFn(details)
+
+		var saveErr error
+		if vulnErr == nil && app.store != nil {
+			if rec.TargetType == analyzer.TargetTypeIP && rec.IPInfo != nil {
+				rec.IPInfo.Lock()
+				rec.IPInfo.VulnsChecked = true
+				rec.IPInfo.Vulnerabilities = vulns
+				rec.IPInfo.Unlock()
+				saveErr = app.store.UpdateIPScan(scanID, rec.IPInfo, "", true)
+			} else if rec.DomainInfo != nil {
+				rec.DomainInfo.Lock()
+				rec.DomainInfo.VulnsChecked = true
+				rec.DomainInfo.Vulnerabilities = vulns
+				rec.DomainInfo.Unlock()
+				saveErr = app.store.UpdateDomainScan(scanID, rec.DomainInfo, "", true)
+			}
+		}
+
+		app.runOnUI(func() {
+			app.scanning = false
+			if vulnErr != nil {
+				app.statusText = fmt.Sprintf("CVE lookup error: %v", vulnErr)
+				return
+			}
+			if saveErr != nil {
+				app.statusText = fmt.Sprintf("CVE save error: %v", saveErr)
+				return
+			}
+			app.statusText = fmt.Sprintf("Completed CVE check for %s (%d CVEs found)", target, len(vulns))
+			app.RefreshHistory()
+			app.SelectScan(scanID)
+		})
+	}()
+}
+
 func (app *DesktopApp) View(c *ui.Context) {
 	if app.textScale <= 0 {
 		app.textScale = 1.0
@@ -863,8 +967,6 @@ func (app *DesktopApp) renderTopBar(c *ui.Context, t *ui.Theme) {
 			target := app.targetInput
 			app.StartScan(target, 0, "")
 		}
-
-		ui.Checkbox(c, &app.checkVulns, "Check CVEs")
 
 		if ui.PrimaryButton(c, "Scan Target").Disabled(app.scanning || strings.TrimSpace(app.targetInput) == "").Clicked() {
 			app.StartScan(app.targetInput, 0, "")
@@ -1269,9 +1371,10 @@ func (app *DesktopApp) renderDomainDetails(c *ui.Context, t *ui.Theme, scanID in
 	// 4. Deep TLS & Cipher Suite Grading + Discovered SAN Domains
 	app.renderTLSGradingCard(c, t, scanID, info.Domain, &info.TLS)
 
-	// 5. Web Tech Stack & Security Headers (Deterministically ordered!)
+	// 5. Web Tech Stack & Security Headers (Deterministically ordered!) + On-Demand CVE Check
 	app.renderSectionCard(c, t, "Web Technologies & Security Headers", func() {
 		app.renderTechStackList(c, t, info.Web)
+		app.renderWebCVESection(c, t, scanID, info.VulnsChecked, info.Vulnerabilities)
 
 		orderedHeaders := sortedSecurityHeaders(info.Web.SecurityHeaders)
 		if len(orderedHeaders) > 0 {
@@ -1288,35 +1391,8 @@ func (app *DesktopApp) renderDomainDetails(c *ui.Context, t *ui.Theme, scanID in
 	// 7. Website Metadata & Well-Known Files (robots.txt, security.txt, sitemap.xml)
 	app.renderMetadataCard(c, t, scanID, info.Domain, info.Metadata)
 
-	// 7. Email Security (MX, SPF, DMARC)
-	app.renderSectionCard(c, t, "Email Providers, SPF & DMARC", func() {
-		if len(info.Email.MailProviders) > 0 {
-			app.renderKeyValue(c, t, "Mail Providers", strings.Join(info.Email.MailProviders, ", "))
-		} else {
-			app.renderKeyValue(c, t, "Mail Providers", "None detected")
-		}
-
-		if info.Email.SPFRecord != nil {
-			app.renderKeyValue(c, t, "SPF Status", fmt.Sprintf("%s — %s (%s)", info.Email.SPFRecord.Status, info.Email.SPFRecord.Policy, info.Email.SPFRecord.Description))
-			app.renderKeyValue(c, t, "SPF Raw", info.Email.SPFRecord.Raw)
-			if len(info.Email.SPFRecord.Includes) > 0 {
-				ui.Text(c, "SPF Includes (Drill-Down):").FontSize(app.fs(12)).TextColor(t.TextMuted)
-				for _, inc := range info.Email.SPFRecord.Includes {
-					app.renderPivotActionRow(c, t, scanID, "", inc, "SPF Include")
-				}
-			}
-		}
-
-		if info.Email.DMARCRecord != nil {
-			app.renderKeyValue(c, t, "DMARC Status", fmt.Sprintf("%s — Policy: %s (%s)", info.Email.DMARCRecord.Status, info.Email.DMARCRecord.Policy, info.Email.DMARCRecord.Description))
-			app.renderKeyValue(c, t, "DMARC Raw", info.Email.DMARCRecord.Raw)
-		}
-	})
-
-	// 8. Vulnerabilities (CVEs)
-	if len(info.Vulnerabilities) > 0 {
-		app.renderVulnerabilitiesCard(c, t, info.Vulnerabilities)
-	}
+	// 8. Email Deliverability & Authentication Deep-Dive (MX, SPF, DMARC, DKIM, MTA-STS, TLS-RPT, BIMI)
+	app.renderEmailAuthCard(c, t, scanID, info)
 }
 
 func (app *DesktopApp) renderIPDetails(c *ui.Context, t *ui.Theme, scanID int64, info *analyzer.IPInfo) {
@@ -1415,6 +1491,8 @@ func (app *DesktopApp) renderIPDetails(c *ui.Context, t *ui.Theme, scanID int64,
 		}
 
 		app.renderTechStackList(c, t, info.Web)
+		app.renderWebCVESection(c, t, scanID, info.VulnsChecked, info.Vulnerabilities)
+
 		orderedHeaders := sortedSecurityHeaders(info.Web.SecurityHeaders)
 		for _, kv := range orderedHeaders {
 			app.renderKeyValue(c, t, kv.Key, kv.Value)
@@ -1426,10 +1504,6 @@ func (app *DesktopApp) renderIPDetails(c *ui.Context, t *ui.Theme, scanID int64,
 
 	// 6. Website Metadata & Well-Known Files (robots.txt, security.txt, sitemap.xml)
 	app.renderMetadataCard(c, t, scanID, info.IP, info.Metadata)
-
-	if len(info.Vulnerabilities) > 0 {
-		app.renderVulnerabilitiesCard(c, t, info.Vulnerabilities)
-	}
 }
 
 func (app *DesktopApp) renderHTTPTraceCard(c *ui.Context, t *ui.Theme, scanID int64, target string, trace *analyzer.HTTPTraceResult) {
@@ -2063,24 +2137,267 @@ func (app *DesktopApp) renderPingAndTracerouteCards(c *ui.Context, t *ui.Theme, 
 	})
 }
 
-func (app *DesktopApp) renderVulnerabilitiesCard(c *ui.Context, t *ui.Theme, vulns []analyzer.Vulnerability) {
-	app.renderSectionCard(c, t, fmt.Sprintf("Detected Vulnerabilities (%d CVEs)", len(vulns)), func() {
-		for _, v := range vulns {
-			vuln := v
-			ui.Box(c).Key(vuln.ID).FillWidth().Padding(8).Radius(6).Border(1, t.Border).Children(func() {
-				ui.Column(c).FillWidth().Gap(4).Children(func() {
-					ui.Row(c).FillWidth().Gap(8).AlignItems(ui.Center).Children(func() {
-						ui.Text(c, vuln.ID).Bold()
-						ui.Badge(c, vuln.Severity)
-						ui.Spacer(c)
-						if vuln.URL != "" {
-							ui.Link(c, "NVD Advisory ↗", vuln.URL)
-						}
-					})
-					ui.Text(c, vuln.Description).FontSize(app.fs(12)).TextColor(t.TextMuted)
-				})
-			})
+func (app *DesktopApp) renderWebCVESection(c *ui.Context, t *ui.Theme, scanID int64, vulnsChecked bool, vulns []analyzer.Vulnerability) {
+	checked := vulnsChecked || len(vulns) > 0
+	ui.Row(c).FillWidth().Gap(10).AlignItems(ui.Center).Wrap().Children(func() {
+		btnLabel := "Check CVEs"
+		if checked {
+			btnLabel = "Re-check CVEs ↻"
 		}
+		if ui.PrimaryButton(c, btnLabel).Disabled(app.scanning).Clicked() {
+			app.StartVulnerabilityCheck(scanID)
+		}
+
+		if !checked {
+			ui.Text(c, "Click 'Check CVEs' to query the NVD database for known vulnerabilities in detected technologies.").
+				FontSize(app.fs(12)).
+				TextColor(t.TextMuted)
+		} else {
+			ui.Badge(c, fmt.Sprintf("%d CVEs Found", len(vulns)))
+			if len(vulns) == 0 {
+				ui.Text(c, "No known CVEs found for detected technology versions.").
+					FontSize(app.fs(12)).
+					TextColor(t.TextMuted)
+			}
+		}
+	})
+
+	for _, v := range vulns {
+		vuln := v
+		ui.Box(c).Key(vuln.ID).FillWidth().Padding(8).Radius(6).Border(1, t.Border).Children(func() {
+			ui.Column(c).FillWidth().Gap(4).Children(func() {
+				ui.Row(c).FillWidth().Gap(8).AlignItems(ui.Center).Children(func() {
+					ui.Text(c, vuln.ID).Bold()
+					ui.Badge(c, vuln.Severity)
+					ui.Spacer(c)
+					if vuln.URL != "" {
+						ui.Link(c, "NVD Advisory ↗", vuln.URL)
+					}
+				})
+				ui.Text(c, vuln.Description).FontSize(app.fs(12)).TextColor(t.TextMuted)
+			})
+		})
+	}
+}
+
+func (app *DesktopApp) renderEmailAuthCard(c *ui.Context, t *ui.Theme, scanID int64, info *analyzer.DomainInfo) {
+	apex := info.ApexDomain
+	if apex == "" {
+		apex = info.Domain
+	}
+	email := info.Email
+
+	app.renderSectionCard(c, t, "Email Deliverability & Authentication (SPF, DMARC, DKIM, MTA-STS, TLS-RPT, BIMI)", func() {
+		ui.Row(c).FillWidth().Gap(10).AlignItems(ui.Center).Wrap().Children(func() {
+			btnLabel := "Audit Email Auth"
+			if email.DeepChecked {
+				btnLabel = "Re-audit Email Auth ↻"
+			}
+			if ui.PrimaryButton(c, btnLabel).Disabled(app.scanning).Clicked() {
+				app.StartEmailDeepDive(scanID)
+			}
+
+			if email.SPFRecord != nil {
+				ui.Badge(c, "SPF: "+email.SPFRecord.Status)
+			} else {
+				ui.Badge(c, "SPF: Missing")
+			}
+
+			if email.DMARCRecord != nil {
+				ui.Badge(c, fmt.Sprintf("DMARC: %s (%s)", email.DMARCRecord.Policy, email.DMARCRecord.Status))
+			} else {
+				ui.Badge(c, "DMARC: Missing")
+			}
+
+			ui.Badge(c, fmt.Sprintf("DKIM: %d Selectors", len(email.DKIMRecords)))
+
+			if email.MTASTS != nil && email.MTASTS.Found {
+				mode := email.MTASTS.Mode
+				if mode == "" {
+					mode = "present"
+				}
+				ui.Badge(c, "MTA-STS: "+mode)
+			} else {
+				ui.Badge(c, "MTA-STS: None")
+			}
+
+			if email.TLSRPT != nil && email.TLSRPT.Found {
+				ui.Badge(c, "TLS-RPT: Present")
+			}
+			if email.BIMI != nil && email.BIMI.Found {
+				ui.Badge(c, "BIMI: Present")
+			}
+		})
+
+		// 1. Mail Providers & MX Hosts
+		if len(email.MailProviders) > 0 {
+			app.renderKeyValue(c, t, "Mail Providers", strings.Join(email.MailProviders, ", "))
+		} else {
+			app.renderKeyValue(c, t, "Mail Providers", "None detected")
+		}
+
+		if len(email.MXRecords) > 0 {
+			ui.Text(c, "MX Servers (Drill-Down):").FontSize(app.fs(12)).TextColor(t.TextMuted)
+			for _, mx := range email.MXRecords {
+				app.renderPivotActionRow(c, t, scanID, "MX Host", mx, "MX Record")
+			}
+		}
+
+		// 2. SPF
+		if email.SPFRecord != nil {
+			app.renderKeyValue(c, t, "SPF Status", fmt.Sprintf("%s — %s (%s)", email.SPFRecord.Status, email.SPFRecord.Policy, email.SPFRecord.Description))
+			app.renderKeyValue(c, t, "SPF Raw", email.SPFRecord.Raw)
+			if len(email.SPFRecord.Includes) > 0 {
+				ui.Text(c, "SPF Includes (Drill-Down):").FontSize(app.fs(12)).TextColor(t.TextMuted)
+				for _, inc := range email.SPFRecord.Includes {
+					app.renderPivotActionRow(c, t, scanID, "", inc, "SPF Include")
+				}
+			}
+		} else {
+			app.renderKeyValue(c, t, "SPF Record", "Not found")
+		}
+
+		// 3. DMARC
+		if email.DMARCRecord != nil {
+			app.renderKeyValue(c, t, "DMARC Status", fmt.Sprintf("%s — Policy: %s (%s)", email.DMARCRecord.Status, email.DMARCRecord.Policy, email.DMARCRecord.Description))
+			if len(email.DMARCRecord.AggregateReports) > 0 {
+				app.renderKeyValue(c, t, "DMARC Reports (rua)", strings.Join(email.DMARCRecord.AggregateReports, ", "))
+			}
+			app.renderKeyValue(c, t, "DMARC Raw", email.DMARCRecord.Raw)
+		} else {
+			app.renderKeyValue(c, t, "DMARC Record", "Not found")
+		}
+
+		// 4. DKIM Selectors
+		ui.Box(c).FillWidth().Padding(8).Radius(6).Border(1, t.Border).Children(func() {
+			ui.Column(c).FillWidth().Gap(6).Children(func() {
+				ui.Row(c).FillWidth().Gap(8).AlignItems(ui.Center).Wrap().Children(func() {
+					ui.Text(c, "DKIM Selectors (DomainKeys Identified Mail)").FontSize(app.fs(13)).Bold()
+					if len(email.DKIMRecords) > 0 {
+						ui.Badge(c, fmt.Sprintf("%d ACTIVE SELECTORS", len(email.DKIMRecords)))
+					} else {
+						ui.Badge(c, "NONE DISCOVERED")
+					}
+				})
+
+				if len(email.DKIMRecords) == 0 {
+					ui.Text(c, fmt.Sprintf("No public DKIM keys discovered across %d common selectors (google, selector1, selector2, default, k1, s1, etc.).", 22)).
+						FontSize(app.fs(12)).
+						TextColor(t.TextMuted)
+				} else {
+					for _, dk := range email.DKIMRecords {
+						dkim := dk
+						ui.Box(c).Key("dkim:"+dkim.Selector).FillWidth().Padding(6).Radius(4).Border(1, t.Border).Children(func() {
+							ui.Column(c).FillWidth().Gap(4).Children(func() {
+								ui.Row(c).FillWidth().Gap(8).AlignItems(ui.Center).Wrap().Children(func() {
+									ui.Badge(c, dkim.Selector+"._domainkey."+apex)
+									if dkim.KeyType != "" {
+										ui.Badge(c, "Key: "+strings.ToUpper(dkim.KeyType))
+									}
+									if dkim.CNAME != "" {
+										ui.Text(c, "CNAME → "+dkim.CNAME).FontSize(app.fs(12)).TextColor(t.TextMuted).Selectable()
+									}
+								})
+								if dkim.RawRecord != "" {
+									ui.Text(c, dkim.RawRecord).FontSize(app.fs(11)).TextColor(t.TextMuted).Selectable()
+								}
+							})
+						})
+					}
+				}
+			})
+		})
+
+		// 5. MTA-STS & SMTP TLS-RPT
+		ui.Box(c).FillWidth().Padding(8).Radius(6).Border(1, t.Border).Children(func() {
+			ui.Column(c).FillWidth().Gap(6).Children(func() {
+				ui.Row(c).FillWidth().Gap(8).AlignItems(ui.Center).Wrap().Children(func() {
+					ui.Text(c, "MTA-STS (RFC 8461) & SMTP TLS Reporting (RFC 8460)").FontSize(app.fs(13)).Bold()
+					if email.MTASTS != nil && email.MTASTS.Found {
+						ui.Badge(c, "MTA-STS: PRESENT")
+						if email.MTASTS.Mode != "" {
+							ui.Badge(c, "Mode: "+strings.ToUpper(email.MTASTS.Mode))
+						}
+					} else {
+						ui.Badge(c, "MTA-STS: MISSING")
+					}
+					if email.TLSRPT != nil && email.TLSRPT.Found {
+						ui.Badge(c, "TLS-RPT: PRESENT")
+					} else {
+						ui.Badge(c, "TLS-RPT: MISSING")
+					}
+					ui.Spacer(c)
+					if email.MTASTS != nil && email.MTASTS.PolicyURL != "" {
+						ui.Link(c, "Open mta-sts.txt ↗", email.MTASTS.PolicyURL)
+					}
+				})
+
+				if email.MTASTS != nil && email.MTASTS.Found {
+					if email.MTASTS.ID != "" {
+						app.renderKeyValue(c, t, "MTA-STS Policy ID", email.MTASTS.ID)
+					}
+					if email.MTASTS.MaxAge != "" {
+						app.renderKeyValue(c, t, "MTA-STS Max Age", email.MTASTS.MaxAge+"s")
+					}
+					if len(email.MTASTS.MXPatterns) > 0 {
+						app.renderKeyValue(c, t, "MTA-STS Allowed MX", strings.Join(email.MTASTS.MXPatterns, ", "))
+					}
+					if email.MTASTS.DNSRecord != "" {
+						app.renderKeyValue(c, t, "MTA-STS DNS Record", email.MTASTS.DNSRecord)
+					}
+				} else {
+					ui.Text(c, "No _mta-sts DNS TXT record or /.well-known/mta-sts.txt policy detected.").
+						FontSize(app.fs(12)).
+						TextColor(t.TextMuted)
+				}
+
+				if email.TLSRPT != nil && email.TLSRPT.Found {
+					if len(email.TLSRPT.Endpoints) > 0 {
+						app.renderKeyValue(c, t, "TLS-RPT Endpoints", strings.Join(email.TLSRPT.Endpoints, ", "))
+					}
+					if email.TLSRPT.RawRecord != "" {
+						app.renderKeyValue(c, t, "TLS-RPT Raw", email.TLSRPT.RawRecord)
+					}
+				}
+			})
+		})
+
+		// 6. BIMI (Brand Indicators for Message Identification)
+		ui.Box(c).FillWidth().Padding(8).Radius(6).Border(1, t.Border).Children(func() {
+			ui.Column(c).FillWidth().Gap(6).Children(func() {
+				ui.Row(c).FillWidth().Gap(8).AlignItems(ui.Center).Wrap().Children(func() {
+					ui.Text(c, "BIMI (Brand Indicators for Message Identification)").FontSize(app.fs(13)).Bold()
+					if email.BIMI != nil && email.BIMI.Found {
+						ui.Badge(c, "PRESENT")
+					} else {
+						ui.Badge(c, "NOT CONFIGURED")
+					}
+					ui.Spacer(c)
+					if email.BIMI != nil && email.BIMI.LogoURL != "" {
+						ui.Link(c, "Open BIMI SVG Logo ↗", email.BIMI.LogoURL)
+					}
+					if email.BIMI != nil && email.BIMI.AuthorityURL != "" {
+						ui.Link(c, "Open VMC Certificate ↗", email.BIMI.AuthorityURL)
+					}
+				})
+
+				if email.BIMI != nil && email.BIMI.Found {
+					if email.BIMI.LogoURL != "" {
+						app.renderKeyValue(c, t, "Brand Logo (l=)", email.BIMI.LogoURL)
+					}
+					if email.BIMI.AuthorityURL != "" {
+						app.renderKeyValue(c, t, "VMC Authority (a=)", email.BIMI.AuthorityURL)
+					}
+					if email.BIMI.RawRecord != "" {
+						app.renderKeyValue(c, t, "BIMI Raw", email.BIMI.RawRecord)
+					}
+				} else {
+					ui.Text(c, "No default._bimi DNS TXT record detected.").
+						FontSize(app.fs(12)).
+						TextColor(t.TextMuted)
+				}
+			})
+		})
 	})
 }
 

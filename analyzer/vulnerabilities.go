@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
+	"sort"
 	"time"
 )
 
@@ -27,16 +28,20 @@ type NVDResponse struct {
 	} `json:"vulnerabilities"`
 }
 
-func getVulnerabilities(info *DomainInfo) error {
+// LookupVulnerabilities queries the NVD CVE API for any detected technologies that have a version number.
+func LookupVulnerabilities(details []TechDetail) ([]Vulnerability, error) {
 	client := &http.Client{Timeout: 10 * time.Second}
-
 	vulnMap := make(map[string]Vulnerability)
 
-	// Only check techs with versions for now to keep it targeted and avoid rate limits
-	for _, tech := range info.Web.TechDetails {
+	versionedIdx := 0
+	for _, tech := range details {
 		if tech.Version == "" {
 			continue
 		}
+		if versionedIdx > 0 {
+			time.Sleep(1 * time.Second)
+		}
+		versionedIdx++
 
 		query := fmt.Sprintf("%s %s", tech.Name, tech.Version)
 		apiURL := fmt.Sprintf("https://services.nvd.nist.gov/rest/json/cves/2.0?keywordSearch=%s&resultsPerPage=3", url.QueryEscape(query))
@@ -66,7 +71,6 @@ func getVulnerabilities(info *DomainInfo) error {
 				}
 			}
 
-			// Truncate description for better display
 			if len(desc) > 150 {
 				desc = desc[:147] + "..."
 			}
@@ -83,19 +87,26 @@ func getVulnerabilities(info *DomainInfo) error {
 				URL:         fmt.Sprintf("https://nvd.nist.gov/vuln/detail/%s", v.CVE.ID),
 			}
 		}
-
-		// Wait a bit to avoid aggressive rate limiting
-		time.Sleep(1 * time.Second)
 	}
 
 	vulns := make([]Vulnerability, 0, len(vulnMap))
 	for _, v := range vulnMap {
 		vulns = append(vulns, v)
 	}
+	sort.Slice(vulns, func(i, j int) bool {
+		return vulns[i].ID < vulns[j].ID
+	})
+	return vulns, nil
+}
 
+func getVulnerabilities(info *DomainInfo) error {
+	vulns, err := LookupVulnerabilities(info.Web.TechDetails)
+	if err != nil {
+		return err
+	}
 	info.Lock()
+	info.VulnsChecked = true
 	info.Vulnerabilities = vulns
 	info.Unlock()
-
 	return nil
 }

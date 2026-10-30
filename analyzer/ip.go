@@ -31,6 +31,7 @@ type IPInfo struct {
 	Traceroute      *TracerouteResult `json:"traceroute,omitempty"`
 	PortScanned     bool              `json:"port_scanned,omitempty"`
 	OpenPorts       []PortService     `json:"open_ports,omitempty"`
+	VulnsChecked    bool              `json:"vulns_checked,omitempty"`
 	Vulnerabilities []Vulnerability   `json:"vulnerabilities,omitempty"`
 }
 
@@ -253,14 +254,16 @@ func AnalyzeIP(ip string, checkVulns bool) *IPInfo {
 
 	wg.Wait()
 
-	if checkVulns && len(info.Web.TechDetails) > 0 {
-		tempDomain := &DomainInfo{
-			Web: info.Web,
-		}
-		if err := getVulnerabilities(tempDomain); err == nil {
-			info.Lock()
-			info.Vulnerabilities = tempDomain.Vulnerabilities
-			info.Unlock()
+	if checkVulns {
+		info.Lock()
+		info.VulnsChecked = true
+		info.Unlock()
+		if len(info.Web.TechDetails) > 0 {
+			if vulns, err := LookupVulnerabilities(info.Web.TechDetails); err == nil {
+				info.Lock()
+				info.Vulnerabilities = vulns
+				info.Unlock()
+			}
 		}
 	}
 

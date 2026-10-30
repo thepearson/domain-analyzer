@@ -129,6 +129,8 @@ func TestDesktopAppDrillDownAndFeatures(t *testing.T) {
 	metaDoneCh := make(chan struct{}, 2)
 	tlsDoneCh := make(chan struct{}, 2)
 	httpDoneCh := make(chan struct{}, 2)
+	emailDoneCh := make(chan struct{}, 2)
+	vulnDoneCh := make(chan struct{}, 2)
 	app.runner = ScanRunnerFunc{
 		AnalyzeDomain: func(domain string, checkVulns bool) *analyzer.DomainInfo {
 			defer func() { doneCh <- struct{}{} }()
@@ -290,9 +292,68 @@ func TestDesktopAppDrillDownAndFeatures(t *testing.T) {
 				},
 			}
 		},
+		InspectEmail: func(domain string) analyzer.EmailInfo {
+			defer func() { emailDoneCh <- struct{}{} }()
+			return analyzer.EmailInfo{
+				DeepChecked:   true,
+				MXRecords:     []string{"aspmx.l.google.com"},
+				MailProviders: []string{"Google Workspace"},
+				SPFRecord: &analyzer.SPFDetails{
+					Raw:         "v=spf1 include:_spf.google.com -all",
+					Policy:      "Fail (-all)",
+					Status:      "Secure",
+					Description: "Strict enforcement; unauthorized emails are rejected.",
+					Includes:    []string{"_spf.google.com"},
+				},
+				DMARCRecord: &analyzer.DMARCDetails{
+					Raw:              "v=DMARC1; p=reject; rua=mailto:dmarc@example.co.nz",
+					Policy:           "reject",
+					Status:           "Secure",
+					Description:      "Maximum protection; unauthorized emails are rejected by receivers.",
+					AggregateReports: []string{"mailto:dmarc@example.co.nz"},
+				},
+				DKIMRecords: []analyzer.DKIMSelectorInfo{
+					{
+						Selector:  "google",
+						KeyType:   "rsa",
+						RawRecord: "v=DKIM1; k=rsa; p=MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8A...",
+					},
+				},
+				MTASTS: &analyzer.MTASTSDetails{
+					Found:      true,
+					ID:         "2026103101",
+					PolicyURL:  "https://mta-sts.example.co.nz/.well-known/mta-sts.txt",
+					Mode:       "enforce",
+					MaxAge:     "604800",
+					MXPatterns: []string{"*.google.com"},
+				},
+				TLSRPT: &analyzer.TLSRPTDetails{
+					Found:     true,
+					RawRecord: "v=TLSRPTv1; rua=mailto:tlsrpt@example.co.nz",
+					Endpoints: []string{"mailto:tlsrpt@example.co.nz"},
+				},
+				BIMI: &analyzer.BIMIDetails{
+					Found:        true,
+					RawRecord:    "v=BIMI1; l=https://example.co.nz/logo.svg; a=https://example.co.nz/vmc.pem",
+					LogoURL:      "https://example.co.nz/logo.svg",
+					AuthorityURL: "https://example.co.nz/vmc.pem",
+				},
+			}
+		},
+		LookupVulnerabilities: func(details []analyzer.TechDetail) ([]analyzer.Vulnerability, error) {
+			defer func() { vulnDoneCh <- struct{}{} }()
+			return []analyzer.Vulnerability{
+				{
+					ID:          "CVE-2024-99999",
+					Severity:    "HIGH (7.5)",
+					Description: "Sample vulnerability in Nginx 1.24.0",
+					URL:         "https://nvd.nist.gov/vuln/detail/CVE-2024-99999",
+				},
+			}, nil
+		},
 	}
 
-	tester := ui.NewTester(app.View, 1280, 3200)
+	tester := ui.NewTester(app.View, 1280, 4200)
 
 	// Verify initial seeded scan, .nz WHOIS link, and OWASP challenge links are displayed
 	if !tester.HasText("portal.example.co.nz") {
@@ -485,6 +546,36 @@ func TestDesktopAppDrillDownAndFeatures(t *testing.T) {
 	tester.Frame()
 	if !tester.HasText("HTTP → HTTPS Upgraded") || !tester.HasText("TTFB: 5.80 ms") {
 		t.Errorf("expected HTTP → HTTPS upgrade badge and waterfall TTFB timing to be rendered on scan page")
+	}
+
+	// Run on-demand CVE check inside "Web Technologies & Security Headers"
+	if err := tester.Click("Check CVEs"); err != nil {
+		t.Fatalf("clicking 'Check CVEs' button in Web Technologies section failed: %v", err)
+	}
+	select {
+	case <-vulnDoneCh:
+	case <-time.After(3 * time.Second):
+		t.Fatalf("timed out waiting for background CVE lookup")
+	}
+	time.Sleep(50 * time.Millisecond)
+	tester.Frame()
+	if !tester.HasText("CVE-2024-99999") || !tester.HasText("1 CVEs Found") {
+		t.Errorf("expected CVE-2024-99999 and '1 CVEs Found' badge to be rendered in Web Technologies section")
+	}
+
+	// Run Email Deliverability & Authentication Deep-Dive (DKIM, MTA-STS, TLS-RPT, BIMI)
+	if err := tester.Click("Audit Email Auth"); err != nil {
+		t.Fatalf("clicking 'Audit Email Auth' failed: %v", err)
+	}
+	select {
+	case <-emailDoneCh:
+	case <-time.After(3 * time.Second):
+		t.Fatalf("timed out waiting for background Email Auth Deep-Dive")
+	}
+	time.Sleep(50 * time.Millisecond)
+	tester.Frame()
+	if !tester.HasText("google._domainkey.example.co.nz") || !tester.HasText("MTA-STS: enforce") || !tester.HasText("BIMI: Present") {
+		t.Errorf("expected DKIM selector, MTA-STS enforce mode, and BIMI badge to be rendered on scan page")
 	}
 
 	// Verify favicon persisted across sessions in scan list

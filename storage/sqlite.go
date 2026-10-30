@@ -226,7 +226,7 @@ func (s *Store) UpdateDomainScan(id int64, info *analyzer.DomainInfo, reason str
 	if info == nil {
 		return fmt.Errorf("domain info is nil")
 	}
-	if info.Ping == nil || info.Traceroute == nil || info.Subdomains == nil || info.Metadata == nil || info.HTTPTrace == nil {
+	if info.Ping == nil || info.Traceroute == nil || info.Subdomains == nil || info.Metadata == nil || info.HTTPTrace == nil || !info.VulnsChecked || !info.Email.DeepChecked {
 		if existingRec, err := s.GetScan(id); err == nil && existingRec.DomainInfo != nil {
 			if info.Ping == nil {
 				info.Ping = existingRec.DomainInfo.Ping
@@ -242,6 +242,29 @@ func (s *Store) UpdateDomainScan(id int64, info *analyzer.DomainInfo, reason str
 			}
 			if info.HTTPTrace == nil {
 				info.HTTPTrace = existingRec.DomainInfo.HTTPTrace
+			}
+			if !info.VulnsChecked && existingRec.DomainInfo.VulnsChecked {
+				info.VulnsChecked = true
+				info.Vulnerabilities = existingRec.DomainInfo.Vulnerabilities
+				checkVulns = true
+			}
+			if !info.Email.DeepChecked && existingRec.DomainInfo.Email.DeepChecked {
+				info.Email.DeepChecked = true
+				if len(info.Email.MXRecords) == 0 {
+					info.Email.MXRecords = existingRec.DomainInfo.Email.MXRecords
+				}
+				if len(info.Email.DKIMRecords) == 0 {
+					info.Email.DKIMRecords = existingRec.DomainInfo.Email.DKIMRecords
+				}
+				if info.Email.MTASTS == nil {
+					info.Email.MTASTS = existingRec.DomainInfo.Email.MTASTS
+				}
+				if info.Email.TLSRPT == nil {
+					info.Email.TLSRPT = existingRec.DomainInfo.Email.TLSRPT
+				}
+				if info.Email.BIMI == nil {
+					info.Email.BIMI = existingRec.DomainInfo.Email.BIMI
+				}
 			}
 		}
 	}
@@ -334,7 +357,7 @@ func (s *Store) UpdateIPScan(id int64, info *analyzer.IPInfo, reason string, che
 	if info == nil {
 		return fmt.Errorf("ip info is nil")
 	}
-	if !info.PortScanned || info.Ping == nil || info.Traceroute == nil || info.Metadata == nil || info.HTTPTrace == nil {
+	if !info.PortScanned || info.Ping == nil || info.Traceroute == nil || info.Metadata == nil || info.HTTPTrace == nil || !info.VulnsChecked {
 		if existingRec, err := s.GetScan(id); err == nil && existingRec.IPInfo != nil {
 			if !info.PortScanned && existingRec.IPInfo.PortScanned {
 				info.PortScanned = true
@@ -351,6 +374,11 @@ func (s *Store) UpdateIPScan(id int64, info *analyzer.IPInfo, reason string, che
 			}
 			if info.HTTPTrace == nil {
 				info.HTTPTrace = existingRec.IPInfo.HTTPTrace
+			}
+			if !info.VulnsChecked && existingRec.IPInfo.VulnsChecked {
+				info.VulnsChecked = true
+				info.Vulnerabilities = existingRec.IPInfo.Vulnerabilities
+				checkVulns = true
 			}
 		}
 	}

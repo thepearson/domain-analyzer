@@ -89,7 +89,10 @@ func ExtractDomainPivots(info *DomainInfo) []PivotTarget {
 		addDomain(san, "TLS SAN")
 	}
 
-	// 5. SPF Includes
+	// 5. MX Records & SPF Includes
+	for _, mx := range info.Email.MXRecords {
+		addDomain(mx, "MX Record")
+	}
 	if info.Email.SPFRecord != nil {
 		for _, inc := range info.Email.SPFRecord.Includes {
 			addDomain(inc, "SPF Include")

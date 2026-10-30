@@ -15,8 +15,11 @@ func getDNSSecurityInfo(domain string, apexDomain string, info *DomainInfo) erro
 	if err == nil {
 		for _, txt := range txts {
 			if strings.HasPrefix(txt, "v=spf1") {
+				spf := ParseSPF(txt)
 				info.Lock()
-				info.Email.SPFRecord = ParseSPF(txt)
+				if info.Email.SPFRecord == nil {
+					info.Email.SPFRecord = spf
+				}
 				info.Unlock()
 				break
 			}
@@ -28,8 +31,11 @@ func getDNSSecurityInfo(domain string, apexDomain string, info *DomainInfo) erro
 	if err == nil {
 		for _, txt := range dmarcTxts {
 			if strings.HasPrefix(txt, "v=DMARC1") {
+				dmarc := ParseDMARC(txt)
 				info.Lock()
-				info.Email.DMARCRecord = ParseDMARC(txt)
+				if info.Email.DMARCRecord == nil {
+					info.Email.DMARCRecord = dmarc
+				}
 				info.Unlock()
 				break
 			}
@@ -221,18 +227,21 @@ func IdentifyNSProviders(hosts []string) []string {
 }
 
 func getMailInfo(domain string, info *DomainInfo) error {
-	mxs, err := net.LookupMX(domain)
-	if err != nil {
-		return err
-	}
-
-	hosts := []string{}
-	for _, mx := range mxs {
-		hosts = append(hosts, mx.Host)
-	}
-
+	emailInfo := InspectEmailDeliverability(domain)
 	info.Lock()
-	info.Email.MailProviders = IdentifyMailProviders(hosts)
+	info.Email.DeepChecked = emailInfo.DeepChecked
+	info.Email.MXRecords = emailInfo.MXRecords
+	info.Email.MailProviders = emailInfo.MailProviders
+	if emailInfo.SPFRecord != nil {
+		info.Email.SPFRecord = emailInfo.SPFRecord
+	}
+	if emailInfo.DMARCRecord != nil {
+		info.Email.DMARCRecord = emailInfo.DMARCRecord
+	}
+	info.Email.DKIMRecords = emailInfo.DKIMRecords
+	info.Email.MTASTS = emailInfo.MTASTS
+	info.Email.TLSRPT = emailInfo.TLSRPT
+	info.Email.BIMI = emailInfo.BIMI
 	info.Unlock()
 	return nil
 }

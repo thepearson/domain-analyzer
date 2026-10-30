@@ -267,4 +267,3 @@ func measureSingleHTTPRequest(targetURL string) (HTTPRedirectHop, HTTPWaterfallT
 
 	return hop, wf, nil
 }
-
