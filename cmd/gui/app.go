@@ -140,6 +140,7 @@ type DesktopApp struct {
 
 	// UI state (accessed on UI thread)
 	sidebarWidth float32
+	textScale    float32
 	targetInput  string
 	checkVulns   bool
 	searchQuery  string
@@ -167,6 +168,7 @@ func NewDesktopApp(store *storage.Store) *DesktopApp {
 	app := &DesktopApp{
 		store:            store,
 		sidebarWidth:     330,
+		textScale:        1.0,
 		scannedTargets:   make(map[string]int64),
 		faviconCache:     make(map[int64]cachedFavicon),
 		techFaviconCache: make(map[string]cachedFavicon),
@@ -185,6 +187,37 @@ func NewDesktopApp(store *storage.Store) *DesktopApp {
 
 func (app *DesktopApp) SetWindow(win *mygo.Window) {
 	app.win = win
+}
+
+func (app *DesktopApp) fs(base float32) float32 {
+	if app.textScale <= 0 {
+		app.textScale = 1.0
+	}
+	return base * app.textScale
+}
+
+func (app *DesktopApp) IncreaseTextSize() {
+	if app.textScale <= 0 {
+		app.textScale = 1.0
+	}
+	app.textScale += 0.1
+	if app.textScale > 2.0 {
+		app.textScale = 2.0
+	}
+}
+
+func (app *DesktopApp) DecreaseTextSize() {
+	if app.textScale <= 0 {
+		app.textScale = 1.0
+	}
+	app.textScale -= 0.1
+	if app.textScale < 0.7 {
+		app.textScale = 0.7
+	}
+}
+
+func (app *DesktopApp) ResetTextSize() {
+	app.textScale = 1.0
 }
 
 func (app *DesktopApp) runOnUI(fn func()) {
@@ -357,7 +390,7 @@ func (app *DesktopApp) renderTechStackList(c *ui.Context, t *ui.Theme, web analy
 	}
 
 	ui.Row(c).FillWidth().Gap(8).AlignItems(ui.Center).Wrap().Children(func() {
-		ui.Text(c, "Detected Tech Stack:").FontSize(12).TextColor(t.TextMuted).MinWidth(140)
+		ui.Text(c, "Detected Tech Stack:").FontSize(app.fs(12)).TextColor(t.TextMuted).MinWidth(140)
 		ui.Row(c).Gap(10).AlignItems(ui.Center).Wrap().Children(func() {
 			for _, td := range details {
 				tech := td
@@ -371,7 +404,7 @@ func (app *DesktopApp) renderTechStackList(c *ui.Context, t *ui.Theme, web analy
 						if tech.Website != "" {
 							ui.Link(c, label+" ↗", tech.Website)
 						} else {
-							ui.Text(c, label).FontSize(13)
+							ui.Text(c, label).FontSize(app.fs(13))
 						}
 					})
 				})
@@ -436,6 +469,20 @@ func (app *DesktopApp) StartScan(rawTarget string, parentID int64, reason string
 }
 
 func (app *DesktopApp) View(c *ui.Context) {
+	if app.textScale <= 0 {
+		app.textScale = 1.0
+	}
+	baseTheme := ui.LightTheme()
+	if c.Theme().Dark {
+		baseTheme = ui.DarkTheme()
+	}
+	defaultFontSize := baseTheme.FontSize
+	if defaultFontSize <= 0 {
+		defaultFontSize = 13
+	}
+	scaledTheme := *baseTheme
+	scaledTheme.FontSize = defaultFontSize * app.textScale
+	c.SetTheme(&scaledTheme)
 	t := c.Theme()
 
 	ui.Column(c).Fill().Background(t.Background).Children(func() {
@@ -454,7 +501,7 @@ func (app *DesktopApp) View(c *ui.Context) {
 
 func (app *DesktopApp) renderTopBar(c *ui.Context, t *ui.Theme) {
 	ui.Row(c).FillWidth().Padding(12).Gap(10).AlignItems(ui.Center).Background(t.Surface).Children(func() {
-		ui.Text(c, "Domain Analyzer").FontSize(17).Bold()
+		ui.Text(c, "Domain Analyzer").FontSize(app.fs(17)).Bold()
 
 		inp := ui.TextInput(c, &app.targetInput).
 			Placeholder("Enter domain (e.g. example.com) or IP (e.g. 93.184.216.34)...").
@@ -474,15 +521,29 @@ func (app *DesktopApp) renderTopBar(c *ui.Context, t *ui.Theme) {
 			ui.Spinner(c)
 		}
 		if app.statusText != "" {
-			ui.Text(c, app.statusText).FontSize(12).TextColor(t.TextMuted)
+			ui.Text(c, app.statusText).FontSize(app.fs(12)).TextColor(t.TextMuted)
 		}
+
+		// Text Size Controls (A- / % / A+)
+		ui.Row(c).Gap(4).AlignItems(ui.Center).Children(func() {
+			if ui.Button(c, "A-").Tooltip("Decrease text size").Disabled(app.textScale <= 0.71).Clicked() {
+				app.DecreaseTextSize()
+			}
+			pctLabel := fmt.Sprintf("%d%%", int(app.textScale*100+0.5))
+			if ui.Button(c, pctLabel).Tooltip("Reset text size to 100%").Clicked() {
+				app.ResetTextSize()
+			}
+			if ui.Button(c, "A+").Tooltip("Increase text size").Disabled(app.textScale >= 1.99).Clicked() {
+				app.IncreaseTextSize()
+			}
+		})
 	})
 }
 
 func (app *DesktopApp) renderSidebar(c *ui.Context, t *ui.Theme) {
 	ui.Column(c).Fill().Padding(10).Gap(8).Children(func() {
 		ui.Row(c).FillWidth().AlignItems(ui.Center).Children(func() {
-			ui.Text(c, "Saved Scans").FontSize(14).Bold()
+			ui.Text(c, "Saved Scans").FontSize(app.fs(14)).Bold()
 			ui.Spacer(c)
 			ui.Badge(c, fmt.Sprintf("%d", len(app.scans)))
 		})
@@ -495,7 +556,7 @@ func (app *DesktopApp) renderSidebar(c *ui.Context, t *ui.Theme) {
 			ui.Column(c).FillWidth().Gap(6).Children(func() {
 				if len(app.scans) == 0 {
 					ui.Text(c, "No scans saved yet. Enter a domain or IP above to start.").
-						FontSize(12).
+						FontSize(app.fs(12)).
 						TextColor(t.TextMuted)
 					return
 				}
@@ -529,25 +590,25 @@ func (app *DesktopApp) renderSidebar(c *ui.Context, t *ui.Theme) {
 									typeBadge = "IP"
 								}
 								ui.Badge(c, typeBadge)
-								ui.Text(c, scanItem.Target).Bold().FontSize(13)
+								ui.Text(c, scanItem.Target).Bold().FontSize(app.fs(13))
 							})
 
 							if scanItem.PivotReason != "" {
 								ui.Text(c, fmt.Sprintf("↳ Pivot via %s", scanItem.PivotReason)).
-									FontSize(11).
+									FontSize(app.fs(11)).
 									TextColor(t.Accent)
 							}
 
 							if scanItem.Summary != "" {
 								ui.Text(c, scanItem.Summary).
-									FontSize(11).
+									FontSize(app.fs(11)).
 									TextColor(t.TextMuted).
 									MaxLines(1).
 									Ellipsis("...")
 							}
 
 							ui.Text(c, scanItem.CreatedAt.Local().Format("2006-01-02 15:04:05")).
-								FontSize(10).
+								FontSize(app.fs(10)).
 								TextColor(t.TextMuted)
 						})
 					})
@@ -565,7 +626,7 @@ func (app *DesktopApp) renderDetailPane(c *ui.Context, t *ui.Theme) {
 	if app.currentScan == nil {
 		ui.Column(c).Fill().Center().Gap(10).Padding(24).Children(func() {
 			ui.Text(c, "Select a scan from the left sidebar or start a new scan above.").
-				FontSize(15).
+				FontSize(app.fs(15)).
 				TextColor(t.TextMuted)
 		})
 		return
@@ -590,7 +651,7 @@ func (app *DesktopApp) renderDetailPane(c *ui.Context, t *ui.Theme) {
 				badgeLabel = "IP SCAN"
 			}
 			ui.Badge(c, badgeLabel)
-			ui.Text(c, scan.Target).FontSize(20).Bold().Selectable()
+			ui.Text(c, scan.Target).FontSize(app.fs(20)).Bold().Selectable()
 
 			if scan.PivotReason != "" {
 				ui.Badge(c, "via "+scan.PivotReason)
@@ -625,7 +686,7 @@ func (app *DesktopApp) renderDetailPane(c *ui.Context, t *ui.Theme) {
 			scan.CreatedAt.Local().Format("2006-01-02 15:04:05"),
 			len(app.currentPivots),
 			len(app.childScans),
-		)).FontSize(12).TextColor(t.TextMuted)
+		)).FontSize(app.fs(12)).TextColor(t.TextMuted)
 
 		// Navigation Tabs
 		tabLabels := []string{
@@ -671,9 +732,9 @@ func (app *DesktopApp) renderPivotActionRow(c *ui.Context, t *ui.Theme, parentSc
 
 	ui.Row(c).Key("pivot:" + reason + ":" + lookupKey).FillWidth().Gap(8).AlignItems(ui.Center).Wrap().Children(func() {
 		if label != "" {
-			ui.Text(c, label+":").FontSize(12).TextColor(t.TextMuted).MinWidth(130)
+			ui.Text(c, label+":").FontSize(app.fs(12)).TextColor(t.TextMuted).MinWidth(130)
 		}
-		ui.Text(c, cleanTarget).FontSize(13).Bold().Selectable()
+		ui.Text(c, cleanTarget).FontSize(app.fs(13)).Bold().Selectable()
 		ui.Badge(c, reason)
 
 		ui.Spacer(c)
@@ -697,7 +758,7 @@ func (app *DesktopApp) renderPivotActionRow(c *ui.Context, t *ui.Theme, parentSc
 func (app *DesktopApp) renderSectionCard(c *ui.Context, t *ui.Theme, title string, children func()) {
 	ui.Box(c).FillWidth().Padding(12).Radius(8).Background(t.Surface).Border(1, t.Border).Children(func() {
 		ui.Column(c).FillWidth().Gap(8).Children(func() {
-			ui.Text(c, title).FontSize(14).Bold()
+			ui.Text(c, title).FontSize(app.fs(14)).Bold()
 			ui.Divider(c)
 			children()
 		})
@@ -709,8 +770,8 @@ func (app *DesktopApp) renderKeyValue(c *ui.Context, t *ui.Theme, key string, va
 		val = "N/A"
 	}
 	ui.Row(c).Key("kv:" + key).FillWidth().Gap(8).AlignItems(ui.Center).Wrap().Children(func() {
-		ui.Text(c, key+":").FontSize(12).TextColor(t.TextMuted).MinWidth(140)
-		ui.Text(c, val).FontSize(13).Selectable()
+		ui.Text(c, key+":").FontSize(app.fs(12)).TextColor(t.TextMuted).MinWidth(140)
+		ui.Text(c, val).FontSize(app.fs(13)).Selectable()
 	})
 }
 
@@ -729,7 +790,7 @@ func (app *DesktopApp) renderDomainDetails(c *ui.Context, t *ui.Theme, scanID in
 		whoisLabel, whoisURL := WhoisBrowserURL(info.Domain, info.ApexDomain)
 		if whoisURL != "" {
 			ui.Row(c).FillWidth().Gap(8).AlignItems(ui.Center).Wrap().Children(func() {
-				ui.Text(c, "External WHOIS:").FontSize(12).TextColor(t.TextMuted).MinWidth(140)
+				ui.Text(c, "External WHOIS:").FontSize(app.fs(12)).TextColor(t.TextMuted).MinWidth(140)
 				ui.Link(c, whoisLabel, whoisURL)
 			})
 		}
@@ -753,7 +814,7 @@ func (app *DesktopApp) renderDomainDetails(c *ui.Context, t *ui.Theme, scanID in
 		}
 
 		if len(info.DNS.Nameservers) > 0 {
-			ui.Text(c, "Nameservers:").FontSize(12).TextColor(t.TextMuted)
+			ui.Text(c, "Nameservers:").FontSize(app.fs(12)).TextColor(t.TextMuted)
 			for _, ns := range info.DNS.Nameservers {
 				app.renderPivotActionRow(c, t, scanID, "", ns, "Nameserver")
 			}
@@ -775,7 +836,7 @@ func (app *DesktopApp) renderDomainDetails(c *ui.Context, t *ui.Theme, scanID in
 		challenges := buildOWASPChallengeLinks(info.Domain, info.WAF)
 		if len(challenges) > 0 {
 			ui.Row(c).FillWidth().Gap(10).AlignItems(ui.Center).Wrap().Children(func() {
-				ui.Text(c, "OWASP Browser Challenges:").FontSize(12).TextColor(t.TextMuted).MinWidth(140)
+				ui.Text(c, "OWASP Browser Challenges:").FontSize(app.fs(12)).TextColor(t.TextMuted).MinWidth(140)
 				for _, ch := range challenges {
 					ui.Link(c, ch.Label, ch.URL)
 				}
@@ -783,7 +844,7 @@ func (app *DesktopApp) renderDomainDetails(c *ui.Context, t *ui.Theme, scanID in
 		}
 
 		if len(info.WAF.CNAMEs) > 0 {
-			ui.Text(c, "CNAME Chain (Drill-Down):").FontSize(12).TextColor(t.TextMuted)
+			ui.Text(c, "CNAME Chain (Drill-Down):").FontSize(app.fs(12)).TextColor(t.TextMuted)
 			for _, cname := range info.WAF.CNAMEs {
 				app.renderPivotActionRow(c, t, scanID, "", cname, "CNAME")
 			}
@@ -797,24 +858,24 @@ func (app *DesktopApp) renderDomainDetails(c *ui.Context, t *ui.Theme, scanID in
 						ui.Badge(c, prov.State)
 					})
 					if len(prov.Implementation) > 0 {
-						ui.Text(c, "Implementation: "+strings.Join(prov.Implementation, " | ")).FontSize(12)
+						ui.Text(c, "Implementation: "+strings.Join(prov.Implementation, " | ")).FontSize(app.fs(12))
 					}
 					if len(prov.Evidence) > 0 {
-						ui.Text(c, "Evidence: "+strings.Join(prov.Evidence, ", ")).FontSize(11).TextColor(t.TextMuted)
+						ui.Text(c, "Evidence: "+strings.Join(prov.Evidence, ", ")).FontSize(app.fs(11)).TextColor(t.TextMuted)
 					}
 				})
 			})
 		}
 
 		for _, note := range info.WAF.OriginNotes {
-			ui.Text(c, "Origin Note: "+note).FontSize(12)
+			ui.Text(c, "Origin Note: "+note).FontSize(app.fs(12))
 		}
 	})
 
 	// 4. TLS Certificate & Subject Alternative Names (SAN drill-downs)
 	app.renderSectionCard(c, t, "TLS Certificate & Discovered SAN Domains", func() {
 		if !info.TLS.HasTLS {
-			ui.Text(c, "No TLS certificate detected on port 443.").FontSize(12).TextColor(t.TextMuted)
+			ui.Text(c, "No TLS certificate detected on port 443.").FontSize(app.fs(12)).TextColor(t.TextMuted)
 			return
 		}
 		app.renderKeyValue(c, t, "TLS Issuer", info.TLS.TLSIssuer)
@@ -822,7 +883,7 @@ func (app *DesktopApp) renderDomainDetails(c *ui.Context, t *ui.Theme, scanID in
 
 		if len(info.TLS.SANDomains) > 0 {
 			ui.Text(c, fmt.Sprintf("Subject Alternative Names (%d):", len(info.TLS.SANDomains))).
-				FontSize(12).
+				FontSize(app.fs(12)).
 				TextColor(t.TextMuted)
 			for _, san := range info.TLS.SANDomains {
 				app.renderPivotActionRow(c, t, scanID, "", san, "TLS SAN")
@@ -836,7 +897,7 @@ func (app *DesktopApp) renderDomainDetails(c *ui.Context, t *ui.Theme, scanID in
 
 		orderedHeaders := sortedSecurityHeaders(info.Web.SecurityHeaders)
 		if len(orderedHeaders) > 0 {
-			ui.Text(c, "HTTP Security Headers:").FontSize(12).TextColor(t.TextMuted)
+			ui.Text(c, "HTTP Security Headers:").FontSize(app.fs(12)).TextColor(t.TextMuted)
 			for _, kv := range orderedHeaders {
 				app.renderKeyValue(c, t, kv.Key, kv.Value)
 			}
@@ -855,7 +916,7 @@ func (app *DesktopApp) renderDomainDetails(c *ui.Context, t *ui.Theme, scanID in
 			app.renderKeyValue(c, t, "SPF Status", fmt.Sprintf("%s — %s (%s)", info.Email.SPFRecord.Status, info.Email.SPFRecord.Policy, info.Email.SPFRecord.Description))
 			app.renderKeyValue(c, t, "SPF Raw", info.Email.SPFRecord.Raw)
 			if len(info.Email.SPFRecord.Includes) > 0 {
-				ui.Text(c, "SPF Includes (Drill-Down):").FontSize(12).TextColor(t.TextMuted)
+				ui.Text(c, "SPF Includes (Drill-Down):").FontSize(app.fs(12)).TextColor(t.TextMuted)
 				for _, inc := range info.Email.SPFRecord.Includes {
 					app.renderPivotActionRow(c, t, scanID, "", inc, "SPF Include")
 				}
@@ -885,7 +946,7 @@ func (app *DesktopApp) renderIPDetails(c *ui.Context, t *ui.Theme, scanID int64,
 
 		if info.IP != "" {
 			ui.Row(c).FillWidth().Gap(8).AlignItems(ui.Center).Wrap().Children(func() {
-				ui.Text(c, "External WHOIS:").FontSize(12).TextColor(t.TextMuted).MinWidth(140)
+				ui.Text(c, "External WHOIS:").FontSize(app.fs(12)).TextColor(t.TextMuted).MinWidth(140)
 				ui.Link(c, "Open Full IP WHOIS in Browser ↗", "https://who.is/whois-ip/ip-address/"+url.PathEscape(info.IP))
 			})
 		}
@@ -894,7 +955,7 @@ func (app *DesktopApp) renderIPDetails(c *ui.Context, t *ui.Theme, scanID int64,
 	// 2. Reverse DNS (PTR) Hostnames
 	app.renderSectionCard(c, t, "Reverse DNS (PTR Hostnames)", func() {
 		if len(info.PTRRecords) == 0 {
-			ui.Text(c, "No PTR records found for this IP address.").FontSize(12).TextColor(t.TextMuted)
+			ui.Text(c, "No PTR records found for this IP address.").FontSize(app.fs(12)).TextColor(t.TextMuted)
 			return
 		}
 		for _, ptr := range info.PTRRecords {
@@ -905,14 +966,14 @@ func (app *DesktopApp) renderIPDetails(c *ui.Context, t *ui.Theme, scanID int64,
 	// 3. Direct TLS Inspection on :443
 	app.renderSectionCard(c, t, "Direct TLS Inspection (:443) & Certificate Domains", func() {
 		if !info.TLS.HasTLS {
-			ui.Text(c, "No TLS service responded on port 443.").FontSize(12).TextColor(t.TextMuted)
+			ui.Text(c, "No TLS service responded on port 443.").FontSize(app.fs(12)).TextColor(t.TextMuted)
 			return
 		}
 		app.renderKeyValue(c, t, "TLS Issuer", info.TLS.TLSIssuer)
 		app.renderKeyValue(c, t, "TLS Expiry", info.TLS.TLSExpiry)
 
 		if len(info.TLS.SANDomains) > 0 {
-			ui.Text(c, "Certificate Domains / SANs (Drill-Down):").FontSize(12).TextColor(t.TextMuted)
+			ui.Text(c, "Certificate Domains / SANs (Drill-Down):").FontSize(app.fs(12)).TextColor(t.TextMuted)
 			for _, san := range info.TLS.SANDomains {
 				app.renderPivotActionRow(c, t, scanID, "", san, "TLS SAN")
 			}
@@ -926,7 +987,7 @@ func (app *DesktopApp) renderIPDetails(c *ui.Context, t *ui.Theme, scanID int64,
 		challenges := buildOWASPChallengeLinks(info.IP, info.WAF)
 		if len(challenges) > 0 {
 			ui.Row(c).FillWidth().Gap(10).AlignItems(ui.Center).Wrap().Children(func() {
-				ui.Text(c, "OWASP Browser Challenges:").FontSize(12).TextColor(t.TextMuted).MinWidth(140)
+				ui.Text(c, "OWASP Browser Challenges:").FontSize(app.fs(12)).TextColor(t.TextMuted).MinWidth(140)
 				for _, ch := range challenges {
 					ui.Link(c, ch.Label, ch.URL)
 				}
@@ -959,7 +1020,7 @@ func (app *DesktopApp) renderVulnerabilitiesCard(c *ui.Context, t *ui.Theme, vul
 							ui.Link(c, "NVD Advisory ↗", vuln.URL)
 						}
 					})
-					ui.Text(c, vuln.Description).FontSize(12).TextColor(t.TextMuted)
+					ui.Text(c, vuln.Description).FontSize(app.fs(12)).TextColor(t.TextMuted)
 				})
 			})
 		}
@@ -969,7 +1030,7 @@ func (app *DesktopApp) renderVulnerabilitiesCard(c *ui.Context, t *ui.Theme, vul
 func (app *DesktopApp) renderPivotsTab(c *ui.Context, t *ui.Theme, scanID int64) {
 	if len(app.currentPivots) == 0 {
 		ui.Text(c, "No additional domains or IP addresses were discovered in this scan.").
-			FontSize(13).
+			FontSize(app.fs(13)).
 			TextColor(t.TextMuted)
 		return
 	}
@@ -989,7 +1050,7 @@ func (app *DesktopApp) renderPivotsTab(c *ui.Context, t *ui.Theme, scanID int64)
 func (app *DesktopApp) renderChildScansTab(c *ui.Context, t *ui.Theme) {
 	if len(app.childScans) == 0 {
 		ui.Text(c, "No subsequent scans have been drilled down from this scan yet. Click 'Scan Domain ↗' or 'Scan IP ↗' on any discovered target to pivot.").
-			FontSize(13).
+			FontSize(app.fs(13)).
 			TextColor(t.TextMuted)
 		return
 	}
@@ -1004,7 +1065,7 @@ func (app *DesktopApp) renderChildScansTab(c *ui.Context, t *ui.Theme) {
 				if ch.PivotReason != "" {
 					ui.Badge(c, "via "+ch.PivotReason)
 				}
-				ui.Text(c, ch.Summary).FontSize(12).TextColor(t.TextMuted)
+				ui.Text(c, ch.Summary).FontSize(app.fs(12)).TextColor(t.TextMuted)
 				ui.Spacer(c)
 				if ui.Button(c, "Open Scan →").Clicked() {
 					app.SelectScan(ch.ID)
@@ -1019,7 +1080,7 @@ func (app *DesktopApp) renderRawJSONTab(c *ui.Context, t *ui.Theme) {
 	ui.Box(c).FillWidth().Padding(12).Radius(8).Background(t.Surface).Border(1, t.Border).Children(func() {
 		ui.Column(c).FillWidth().Gap(8).Children(func() {
 			ui.Row(c).FillWidth().AlignItems(ui.Center).Children(func() {
-				ui.Text(c, "Formatted & Syntax-Highlighted JSON").FontSize(14).Bold()
+				ui.Text(c, "Formatted & Syntax-Highlighted JSON").FontSize(app.fs(14)).Bold()
 				ui.Spacer(c)
 				if ui.PrimaryButton(c, "Copy JSON to Clipboard").Clicked() {
 					c.WriteClipboard(app.rawJSONReadOnly)
@@ -1033,7 +1094,7 @@ func (app *DesktopApp) renderRawJSONTab(c *ui.Context, t *ui.Theme) {
 				spans = app.jsonSpansDark
 			}
 			ui.Box(c).FillWidth().Padding(12).Radius(6).Background(t.Background).Border(1, t.Border).Children(func() {
-				ui.RichText(c, spans...).Font("monospace").FontSize(12).Selectable().FillWidth()
+				ui.RichText(c, spans...).Font("monospace").FontSize(app.fs(12)).Selectable().FillWidth()
 			})
 		})
 	})

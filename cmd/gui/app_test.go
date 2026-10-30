@@ -160,6 +160,23 @@ func TestDesktopAppDrillDownAndFeatures(t *testing.T) {
 		t.Errorf("expected UI to render clickable tech link 'Nginx (1.24.0) ↗'")
 	}
 
+	// Test adjusting text size up and down in the GUI
+	if !tester.HasText("100%") {
+		t.Fatalf("expected default text size indicator '100%%'")
+	}
+	if err := tester.Click("A+"); err != nil {
+		t.Fatalf("clicking 'A+' failed: %v", err)
+	}
+	if !tester.HasText("110%") {
+		t.Errorf("expected text size indicator '110%%' after clicking A+")
+	}
+	if err := tester.Click("A-"); err != nil {
+		t.Fatalf("clicking 'A-' failed: %v", err)
+	}
+	if !tester.HasText("100%") {
+		t.Errorf("expected text size indicator '100%%' after clicking A-")
+	}
+
 	// Switch to Raw JSON tab and verify syntax-highlighted JSON & Copy button
 	if err := tester.Click("Raw JSON"); err != nil {
 		t.Fatalf("clicking 'Raw JSON' tab failed: %v", err)
