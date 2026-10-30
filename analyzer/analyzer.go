@@ -31,8 +31,10 @@ type CAADetails struct {
 
 type DNSInfo struct {
 	IPAddress   string      `json:"ip_address,omitempty"`
+	IPTTL       uint32      `json:"ip_ttl,omitempty"`
 	IPOwner     string      `json:"ip_owner,omitempty"`
 	WWWAddress  string      `json:"www_address,omitempty"`
+	WWWTTL      uint32      `json:"www_ttl,omitempty"`
 	Nameservers []string    `json:"nameservers,omitempty"`
 	NSProviders []string    `json:"ns_providers,omitempty"`
 	CAARecord   *CAADetails `json:"caa,omitempty"`

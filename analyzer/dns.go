@@ -155,15 +155,35 @@ func getNameserverInfo(domain string, info *DomainInfo) error {
 
 func getWWWInfo(domain string, info *DomainInfo) error {
 	wwwDomain := "www." + domain
-	ips, err := net.LookupIP(wwwDomain)
-	if err != nil || len(ips) == 0 {
+	ip, ttl, err := lookupA(wwwDomain)
+	if err != nil {
 		return err
 	}
 
 	info.Lock()
-	info.DNS.WWWAddress = ips[0].String()
+	info.DNS.WWWAddress = ip
+	info.DNS.WWWTTL = ttl
 	info.Unlock()
 	return nil
+}
+
+func lookupA(domain string) (string, uint32, error) {
+	c := new(dns.Client)
+	m := new(dns.Msg)
+	m.SetQuestion(dns.Fqdn(domain), dns.TypeA)
+	m.RecursionDesired = true
+
+	r, _, err := c.Exchange(m, "8.8.8.8:53")
+	if err != nil {
+		return "", 0, err
+	}
+
+	for _, ans := range r.Answer {
+		if a, ok := ans.(*dns.A); ok {
+			return a.A.String(), a.Hdr.Ttl, nil
+		}
+	}
+	return "", 0, fmt.Errorf("no A record found")
 }
 
 func IdentifyNSProviders(hosts []string) []string {
@@ -257,17 +277,18 @@ func IdentifyMailProviders(hosts []string) []string {
 }
 
 func getIPInfo(domain string, info *DomainInfo) error {
-	ips, err := net.LookupIP(domain)
-	if err != nil || len(ips) == 0 {
+	ip, ttl, err := lookupA(domain)
+	if err != nil {
 		return err
 	}
 
 	info.Lock()
-	info.DNS.IPAddress = ips[0].String()
+	info.DNS.IPAddress = ip
+	info.DNS.IPTTL = ttl
 	info.Unlock()
 
 	// Find IP owner via WHOIS
-	result, err := whois.Whois(ips[0].String())
+	result, err := whois.Whois(ip)
 	if err == nil {
 		owner := ParseIPOwner(result)
 		if owner != "" {

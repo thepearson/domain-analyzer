@@ -28,6 +28,13 @@ The project is structured into modular packages to ensure scalability and testab
   - `json.go`: Standard JSON serialization.
   - `csv.go`: Comma-separated values for spreadsheet compatibility.
 
+## Future Roadmap
+- **Passive Subdomain Discovery**: Integration with `crt.sh` to find subdomains via Certificate Transparency logs.
+- **Metadata Analysis**: Automatic fetching and parsing of `robots.txt`, `security.txt`, and `sitemap.xml`.
+- **Infrastructure Context**: Enhanced Geo-IP data and CDN/WAF detection (Cloudflare, Akamai, etc.).
+- **Reconnaissance Tools**: Basic port scanning for common services (SSH, RDP, FTP) and favicon hashing for tech discovery.
+- **Reputation Checks**: Integration with threat intelligence feeds (Google Safe Browsing, PhishTank).
+
 ## Building and Running
 
 ### Prerequisites

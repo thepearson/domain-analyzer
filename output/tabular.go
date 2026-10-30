@@ -25,9 +25,17 @@ func (f *TabularFormatter) Format(w io.Writer, info *analyzer.DomainInfo) error 
 	}
 	fmt.Fprintf(tw, "Registrar\t%s\n", info.Registrar)
 	fmt.Fprintf(tw, "Domain Expiry\t%s\n", info.ExpiryDate)
-	fmt.Fprintf(tw, "IP Address\t%s\n", info.DNS.IPAddress)
+	if info.DNS.IPTTL > 0 {
+		fmt.Fprintf(tw, "IP Address\t%s (TTL %d)\n", info.DNS.IPAddress, info.DNS.IPTTL)
+	} else {
+		fmt.Fprintf(tw, "IP Address\t%s\n", info.DNS.IPAddress)
+	}
 	fmt.Fprintf(tw, "IP Owner\t%s\n", info.DNS.IPOwner)
-	fmt.Fprintf(tw, "WWW DNS Result\t%s\n", info.DNS.WWWAddress)
+	if info.DNS.WWWTTL > 0 {
+		fmt.Fprintf(tw, "WWW DNS Result\t%s (TTL %d)\n", info.DNS.WWWAddress, info.DNS.WWWTTL)
+	} else {
+		fmt.Fprintf(tw, "WWW DNS Result\t%s\n", info.DNS.WWWAddress)
+	}
 	fmt.Fprintf(tw, "Nameservers\t%s\n", strings.Join(info.DNS.Nameservers, ", "))
 	fmt.Fprintf(tw, "DNS Providers\t%s\n", strings.Join(info.DNS.NSProviders, ", "))
 
