@@ -96,4 +96,3 @@ func TestParseHTMLPageMeta(t *testing.T) {
 		t.Errorf("unexpected canonical: %q", canon)
 	}
 }
-

@@ -63,10 +63,30 @@ type Vulnerability struct {
 }
 
 type TLSInfo struct {
-	HasTLS     bool     `json:"has_tls"`
-	TLSIssuer  string   `json:"tls_issuer,omitempty"`
-	TLSExpiry  string   `json:"tls_expiry,omitempty"`
-	SANDomains []string `json:"san_domains,omitempty"`
+	HasTLS              bool     `json:"has_tls"`
+	Grade               string   `json:"grade,omitempty"`
+	GradeSummary        string   `json:"grade_summary,omitempty"`
+	GradeWarnings       []string `json:"grade_warnings,omitempty"`
+	NegotiatedVersion   string   `json:"negotiated_version,omitempty"`
+	SupportedVersions   []string `json:"supported_versions,omitempty"`
+	DeprecatedVersions  []string `json:"deprecated_versions,omitempty"`
+	CipherSuite         string   `json:"cipher_suite,omitempty"`
+	ALPNProtocol        string   `json:"alpn_protocol,omitempty"`
+	SubjectCN           string   `json:"subject_cn,omitempty"`
+	TLSIssuer           string   `json:"tls_issuer,omitempty"`
+	ValidFrom           string   `json:"valid_from,omitempty"`
+	TLSExpiry           string   `json:"tls_expiry,omitempty"`
+	DaysRemaining       int      `json:"days_remaining"`
+	KeyAlgorithm        string   `json:"key_algorithm,omitempty"`
+	SignatureAlgorithm  string   `json:"signature_algorithm,omitempty"`
+	SerialNumber        string   `json:"serial_number,omitempty"`
+	ChainValid          bool     `json:"chain_valid"`
+	ChainError          string   `json:"chain_error,omitempty"`
+	ChainLength         int      `json:"chain_length,omitempty"`
+	ChainSummary        []string `json:"chain_summary,omitempty"`
+	OCSPStapled         bool     `json:"ocsp_stapled"`
+	HasCertTransparency bool     `json:"has_cert_transparency"`
+	SANDomains          []string `json:"san_domains,omitempty"`
 }
 
 type EmailInfo struct {

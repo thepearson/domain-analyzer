@@ -439,4 +439,3 @@ func ParseHTMLPageMeta(htmlBody string) (title, description, generator, canonica
 	}
 	return title, description, generator, canonical
 }
-

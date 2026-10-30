@@ -76,8 +76,27 @@ func (f *TabularFormatter) Format(w io.Writer, info *analyzer.DomainInfo) error 
 	fmt.Fprintln(tw, "==================================================")
 	fmt.Fprintf(tw, "Has TLS\t%v\n", info.TLS.HasTLS)
 	if info.TLS.HasTLS {
+		if info.TLS.Grade != "" {
+			fmt.Fprintf(tw, "TLS Security Grade\t[%s] %s\n", info.TLS.Grade, info.TLS.GradeSummary)
+		}
+		if info.TLS.NegotiatedVersion != "" {
+			fmt.Fprintf(tw, "Negotiated Protocol\t%s (ALPN: %s)\n", info.TLS.NegotiatedVersion, info.TLS.ALPNProtocol)
+		}
+		if len(info.TLS.SupportedVersions) > 0 {
+			fmt.Fprintf(tw, "Supported Protocols\t%s\n", strings.Join(info.TLS.SupportedVersions, ", "))
+		}
+		if info.TLS.CipherSuite != "" {
+			fmt.Fprintf(tw, "Cipher Suite\t%s\n", info.TLS.CipherSuite)
+		}
+		if info.TLS.KeyAlgorithm != "" {
+			fmt.Fprintf(tw, "Key & Signature\t%s (%s)\n", info.TLS.KeyAlgorithm, info.TLS.SignatureAlgorithm)
+		}
 		fmt.Fprintf(tw, "TLS Provider\t%s\n", info.TLS.TLSIssuer)
-		fmt.Fprintf(tw, "TLS Expiry\t%s\n", info.TLS.TLSExpiry)
+		fmt.Fprintf(tw, "TLS Expiry\t%s (%d days remaining)\n", info.TLS.TLSExpiry, info.TLS.DaysRemaining)
+		fmt.Fprintf(tw, "Chain Trusted\t%v (OCSP Stapled: %v, CT SCT: %v)\n", info.TLS.ChainValid, info.TLS.OCSPStapled, info.TLS.HasCertTransparency)
+		for _, w := range info.TLS.GradeWarnings {
+			fmt.Fprintf(tw, "TLS Warning\t%s\n", w)
+		}
 		fmt.Fprintf(tw, "SAN Domains\t%s\n", strings.Join(info.TLS.SANDomains, ", "))
 	}
 

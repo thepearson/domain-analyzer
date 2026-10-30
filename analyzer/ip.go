@@ -110,47 +110,13 @@ func AnalyzeIP(ip string, checkVulns bool) *IPInfo {
 	// 3. Direct TLS Inspection on :443
 	go func() {
 		defer wg.Done()
-		conf := &tls.Config{
-			InsecureSkipVerify: true,
-		}
-		dialer := &net.Dialer{Timeout: 10 * time.Second}
-		conn, err := tls.DialWithDialer(dialer, "tcp", net.JoinHostPort(cleanIP, "443"), conf)
+		tlsInfo, err := InspectTLS(cleanIP)
 		if err != nil {
 			return
 		}
-		defer conn.Close()
-
-		certs := conn.ConnectionState().PeerCertificates
-		if len(certs) > 0 {
-			cert := certs[0]
-			var sans []string
-			seen := make(map[string]bool)
-			addSAN := func(name string) {
-				name = strings.TrimSpace(name)
-				lower := strings.ToLower(name)
-				if name != "" && !seen[lower] {
-					seen[lower] = true
-					sans = append(sans, name)
-				}
-			}
-			for _, dnsName := range cert.DNSNames {
-				addSAN(dnsName)
-			}
-			if cert.Subject.CommonName != "" && strings.Contains(cert.Subject.CommonName, ".") && !IsIPAddress(cert.Subject.CommonName) {
-				addSAN(cert.Subject.CommonName)
-			}
-
-			info.Lock()
-			info.TLS.HasTLS = true
-			if len(cert.Issuer.Organization) > 0 {
-				info.TLS.TLSIssuer = cert.Issuer.Organization[0]
-			} else {
-				info.TLS.TLSIssuer = cert.Issuer.CommonName
-			}
-			info.TLS.TLSExpiry = cert.NotAfter.Format(time.RFC3339)
-			info.TLS.SANDomains = sans
-			info.Unlock()
-		}
+		info.Lock()
+		info.TLS = tlsInfo
+		info.Unlock()
 	}()
 
 	// 4. Direct HTTP/HTTPS Web & Security Headers Inspection

@@ -130,6 +130,7 @@ type ScanRunnerFunc struct {
 	RunTraceroute       func(target string) *analyzer.TracerouteResult
 	EnumerateSubdomains func(domain string) *analyzer.SubdomainEnumeration
 	InspectMetadata     func(target string) *analyzer.WebsiteMetadata
+	InspectTLS          func(target string) (analyzer.TLSInfo, error)
 }
 
 type cachedFavicon struct {
@@ -186,6 +187,7 @@ func NewDesktopApp(store *storage.Store) *DesktopApp {
 			RunTraceroute:       analyzer.RunTraceroute,
 			EnumerateSubdomains: analyzer.EnumerateSubdomains,
 			InspectMetadata:     analyzer.InspectWebsiteMetadata,
+			InspectTLS:          analyzer.InspectTLS,
 		},
 	}
 	app.RefreshHistory()
@@ -723,6 +725,55 @@ func (app *DesktopApp) StartMetadataInspection(scanID int64) {
 	}()
 }
 
+// StartTLSAudit runs a deep TLS & cipher suite audit against the currently selected domain or IP scan.
+func (app *DesktopApp) StartTLSAudit(scanID int64) {
+	if app.currentScan == nil || app.currentScan.ID != scanID || app.scanning {
+		return
+	}
+	rec := app.currentScan
+	target := rec.Target
+	app.scanning = true
+	app.statusText = fmt.Sprintf("Running deep TLS & cipher suite audit on %s...", target)
+
+	go func() {
+		tlsFn := app.runner.InspectTLS
+		if tlsFn == nil {
+			tlsFn = analyzer.InspectTLS
+		}
+		tlsRes, tlsErr := tlsFn(target)
+
+		var saveErr error
+		if tlsErr == nil && app.store != nil {
+			if rec.TargetType == analyzer.TargetTypeIP && rec.IPInfo != nil {
+				rec.IPInfo.Lock()
+				rec.IPInfo.TLS = tlsRes
+				rec.IPInfo.Unlock()
+				saveErr = app.store.UpdateIPScan(scanID, rec.IPInfo, "", rec.CheckVulns)
+			} else if rec.DomainInfo != nil {
+				rec.DomainInfo.Lock()
+				rec.DomainInfo.TLS = tlsRes
+				rec.DomainInfo.Unlock()
+				saveErr = app.store.UpdateDomainScan(scanID, rec.DomainInfo, "", rec.CheckVulns)
+			}
+		}
+
+		app.runOnUI(func() {
+			app.scanning = false
+			if tlsErr != nil {
+				app.statusText = fmt.Sprintf("TLS audit error on %s: %v", target, tlsErr)
+				return
+			}
+			if saveErr != nil {
+				app.statusText = fmt.Sprintf("TLS save error: %v", saveErr)
+				return
+			}
+			app.statusText = fmt.Sprintf("Completed TLS audit for %s (Grade: %s)", target, tlsRes.Grade)
+			app.RefreshHistory()
+			app.SelectScan(scanID)
+		})
+	}()
+}
+
 func (app *DesktopApp) View(c *ui.Context) {
 	if app.textScale <= 0 {
 		app.textScale = 1.0
@@ -1168,24 +1219,8 @@ func (app *DesktopApp) renderDomainDetails(c *ui.Context, t *ui.Theme, scanID in
 		}
 	})
 
-	// 4. TLS Certificate & Subject Alternative Names (SAN drill-downs)
-	app.renderSectionCard(c, t, "TLS Certificate & Discovered SAN Domains", func() {
-		if !info.TLS.HasTLS {
-			ui.Text(c, "No TLS certificate detected on port 443.").FontSize(app.fs(12)).TextColor(t.TextMuted)
-			return
-		}
-		app.renderKeyValue(c, t, "TLS Issuer", info.TLS.TLSIssuer)
-		app.renderKeyValue(c, t, "TLS Expiry", info.TLS.TLSExpiry)
-
-		if len(info.TLS.SANDomains) > 0 {
-			ui.Text(c, fmt.Sprintf("Subject Alternative Names (%d):", len(info.TLS.SANDomains))).
-				FontSize(app.fs(12)).
-				TextColor(t.TextMuted)
-			for _, san := range info.TLS.SANDomains {
-				app.renderPivotActionRow(c, t, scanID, "", san, "TLS SAN")
-			}
-		}
-	})
+	// 4. Deep TLS & Cipher Suite Grading + Discovered SAN Domains
+	app.renderTLSGradingCard(c, t, scanID, info.Domain, &info.TLS)
 
 	// 5. Web Tech Stack & Security Headers (Deterministically ordered!)
 	app.renderSectionCard(c, t, "Web Technologies & Security Headers", func() {
@@ -1312,22 +1347,8 @@ func (app *DesktopApp) renderIPDetails(c *ui.Context, t *ui.Theme, scanID int64,
 		}
 	})
 
-	// 3. Direct TLS Inspection on :443
-	app.renderSectionCard(c, t, "Direct TLS Inspection (:443) & Certificate Domains", func() {
-		if !info.TLS.HasTLS {
-			ui.Text(c, "No TLS service responded on port 443.").FontSize(app.fs(12)).TextColor(t.TextMuted)
-			return
-		}
-		app.renderKeyValue(c, t, "TLS Issuer", info.TLS.TLSIssuer)
-		app.renderKeyValue(c, t, "TLS Expiry", info.TLS.TLSExpiry)
-
-		if len(info.TLS.SANDomains) > 0 {
-			ui.Text(c, "Certificate Domains / SANs (Drill-Down):").FontSize(app.fs(12)).TextColor(t.TextMuted)
-			for _, san := range info.TLS.SANDomains {
-				app.renderPivotActionRow(c, t, scanID, "", san, "TLS SAN")
-			}
-		}
-	})
+	// 4. Deep TLS & Cipher Suite Grading (:443) & Certificate Domains
+	app.renderTLSGradingCard(c, t, scanID, info.IP, &info.TLS)
 
 	// 4. Direct HTTP / WAF / Tech Stack on IP
 	app.renderSectionCard(c, t, "Direct HTTP, WAF & Tech Fingerprinting", func() {
@@ -1356,6 +1377,112 @@ func (app *DesktopApp) renderIPDetails(c *ui.Context, t *ui.Theme, scanID int64,
 	if len(info.Vulnerabilities) > 0 {
 		app.renderVulnerabilitiesCard(c, t, info.Vulnerabilities)
 	}
+}
+
+func (app *DesktopApp) renderTLSGradingCard(c *ui.Context, t *ui.Theme, scanID int64, target string, tlsInfo *analyzer.TLSInfo) {
+	app.renderSectionCard(c, t, "Deep TLS, Cipher Suite Grading & Certificate SANs", func() {
+		ui.Row(c).FillWidth().Gap(10).AlignItems(ui.Center).Wrap().Children(func() {
+			btnLabel := "Audit TLS & Ciphers"
+			if tlsInfo != nil && tlsInfo.Grade != "" {
+				btnLabel = "Re-audit TLS ↻"
+			}
+			if ui.PrimaryButton(c, btnLabel).Disabled(app.scanning).Clicked() {
+				app.StartTLSAudit(scanID)
+			}
+
+			if tlsInfo == nil || !tlsInfo.HasTLS {
+				ui.Text(c, "No TLS service detected on port 443.").FontSize(app.fs(12)).TextColor(t.TextMuted)
+			} else {
+				if tlsInfo.Grade != "" {
+					ui.Badge(c, "Grade: "+tlsInfo.Grade)
+				}
+				if tlsInfo.NegotiatedVersion != "" {
+					ui.Badge(c, tlsInfo.NegotiatedVersion)
+				}
+				if tlsInfo.ChainValid {
+					ui.Badge(c, "Chain Trusted")
+				} else if tlsInfo.Grade != "" {
+					ui.Badge(c, "Chain Untrusted")
+				}
+				if tlsInfo.TLSExpiry != "" {
+					if tlsInfo.DaysRemaining < 0 {
+						ui.Badge(c, fmt.Sprintf("EXPIRED (%dd ago)", -tlsInfo.DaysRemaining))
+					} else if tlsInfo.DaysRemaining > 0 || tlsInfo.Grade != "" {
+						ui.Badge(c, fmt.Sprintf("%d Days Remaining", tlsInfo.DaysRemaining))
+					}
+				}
+				if tlsInfo.HasCertTransparency {
+					ui.Badge(c, "CT SCT: Present")
+				}
+				if tlsInfo.OCSPStapled {
+					ui.Badge(c, "OCSP Stapled")
+				}
+			}
+		})
+
+		if tlsInfo == nil || !tlsInfo.HasTLS {
+			return
+		}
+
+		if tlsInfo.GradeSummary != "" {
+			app.renderKeyValue(c, t, "TLS Grade Summary", fmt.Sprintf("[%s] %s", tlsInfo.Grade, tlsInfo.GradeSummary))
+		}
+
+		if len(tlsInfo.GradeWarnings) > 0 {
+			ui.Box(c).FillWidth().Padding(8).Radius(6).Border(1, t.Danger).Children(func() {
+				ui.Column(c).FillWidth().Gap(4).Children(func() {
+					ui.Text(c, "TLS Findings & Warnings:").FontSize(app.fs(12)).Bold().TextColor(t.Danger)
+					for _, w := range tlsInfo.GradeWarnings {
+						ui.Text(c, "• "+w).FontSize(app.fs(12)).TextColor(t.Danger)
+					}
+				})
+			})
+		}
+
+		if len(tlsInfo.SupportedVersions) > 0 {
+			app.renderKeyValue(c, t, "Supported Protocols", strings.Join(tlsInfo.SupportedVersions, ", "))
+		}
+		if tlsInfo.CipherSuite != "" {
+			cipherLine := tlsInfo.CipherSuite
+			if tlsInfo.ALPNProtocol != "" {
+				cipherLine += fmt.Sprintf(" (ALPN: %s)", tlsInfo.ALPNProtocol)
+			}
+			app.renderKeyValue(c, t, "Negotiated Cipher", cipherLine)
+		}
+		if tlsInfo.KeyAlgorithm != "" {
+			keyLine := tlsInfo.KeyAlgorithm
+			if tlsInfo.SignatureAlgorithm != "" {
+				keyLine += fmt.Sprintf(" — Signature: %s", tlsInfo.SignatureAlgorithm)
+			}
+			app.renderKeyValue(c, t, "Public Key & Sig", keyLine)
+		}
+
+		if tlsInfo.SubjectCN != "" {
+			app.renderKeyValue(c, t, "Certificate Subject", tlsInfo.SubjectCN)
+		}
+		app.renderKeyValue(c, t, "TLS Issuer", tlsInfo.TLSIssuer)
+		if tlsInfo.ValidFrom != "" {
+			app.renderKeyValue(c, t, "Validity Window", fmt.Sprintf("%s → %s", tlsInfo.ValidFrom, tlsInfo.TLSExpiry))
+		} else {
+			app.renderKeyValue(c, t, "TLS Expiry", tlsInfo.TLSExpiry)
+		}
+
+		if len(tlsInfo.ChainSummary) > 0 {
+			ui.Text(c, fmt.Sprintf("Certificate Chain (%d):", len(tlsInfo.ChainSummary))).FontSize(app.fs(12)).TextColor(t.TextMuted)
+			for _, certLine := range tlsInfo.ChainSummary {
+				ui.Text(c, "  "+certLine).FontSize(app.fs(12)).Selectable()
+			}
+		}
+
+		if len(tlsInfo.SANDomains) > 0 {
+			ui.Text(c, fmt.Sprintf("Subject Alternative Names (%d):", len(tlsInfo.SANDomains))).
+				FontSize(app.fs(12)).
+				TextColor(t.TextMuted)
+			for _, san := range tlsInfo.SANDomains {
+				app.renderPivotActionRow(c, t, scanID, "", san, "TLS SAN")
+			}
+		}
+	})
 }
 
 func (app *DesktopApp) renderMetadataCard(c *ui.Context, t *ui.Theme, scanID int64, target string, meta *analyzer.WebsiteMetadata) {

@@ -127,6 +127,7 @@ func TestDesktopAppDrillDownAndFeatures(t *testing.T) {
 	traceDoneCh := make(chan struct{}, 2)
 	subDoneCh := make(chan struct{}, 2)
 	metaDoneCh := make(chan struct{}, 2)
+	tlsDoneCh := make(chan struct{}, 2)
 	app.runner = ScanRunnerFunc{
 		AnalyzeDomain: func(domain string, checkVulns bool) *analyzer.DomainInfo {
 			defer func() { doneCh <- struct{}{} }()
@@ -226,9 +227,30 @@ func TestDesktopAppDrillDownAndFeatures(t *testing.T) {
 				},
 			}
 		},
+		InspectTLS: func(target string) (analyzer.TLSInfo, error) {
+			defer func() { tlsDoneCh <- struct{}{} }()
+			return analyzer.TLSInfo{
+				HasTLS:              true,
+				Grade:               "A+",
+				GradeSummary:        "Exceptional TLS 1.3 configuration with strong AEAD cipher & Certificate Transparency",
+				NegotiatedVersion:   "TLS 1.3",
+				SupportedVersions:   []string{"TLS 1.2", "TLS 1.3"},
+				CipherSuite:         "TLS_AES_128_GCM_SHA256",
+				ALPNProtocol:        "h2",
+				KeyAlgorithm:        "ECDSA P-256 (256-bit)",
+				SignatureAlgorithm:  "ECDSA-SHA256",
+				SubjectCN:           "portal.example.co.nz",
+				TLSIssuer:           "Let's Encrypt",
+				TLSExpiry:           "2026-12-31T00:00:00Z",
+				DaysRemaining:       61,
+				ChainValid:          true,
+				HasCertTransparency: true,
+				SANDomains:          []string{"portal.example.co.nz", "api.example.co.nz"},
+			}, nil
+		},
 	}
 
-	tester := ui.NewTester(app.View, 1280, 2200)
+	tester := ui.NewTester(app.View, 1280, 2600)
 
 	// Verify initial seeded scan, .nz WHOIS link, and OWASP challenge links are displayed
 	if !tester.HasText("portal.example.co.nz") {
@@ -391,6 +413,21 @@ func TestDesktopAppDrillDownAndFeatures(t *testing.T) {
 	tester.Frame()
 	if !tester.HasText("/admin/secret") || !tester.HasText("mailto:security@example.co.nz") {
 		t.Errorf("expected robots.txt disallow path and security.txt contact to be rendered on scan page")
+	}
+
+	// Run Deep TLS & Cipher Suite Audit on the domain scan page
+	if err := tester.Click("Audit TLS & Ciphers"); err != nil {
+		t.Fatalf("clicking 'Audit TLS & Ciphers' failed: %v", err)
+	}
+	select {
+	case <-tlsDoneCh:
+	case <-time.After(3 * time.Second):
+		t.Fatalf("timed out waiting for background TLS Audit")
+	}
+	time.Sleep(50 * time.Millisecond)
+	tester.Frame()
+	if !tester.HasText("Grade: A+") || !tester.HasText("TLS_AES_128_GCM_SHA256 (ALPN: h2)") {
+		t.Errorf("expected TLS Grade A+ and cipher suite to be rendered on scan page")
 	}
 
 	// Verify favicon persisted across sessions in scan list
