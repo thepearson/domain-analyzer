@@ -47,6 +47,22 @@ func (f *TabularFormatter) Format(w io.Writer, info *analyzer.DomainInfo) error 
 		fmt.Fprintf(tw, "CAA Records\tNot found\n")
 	}
 
+	if info.ZoneAudit != nil {
+		if len(info.ZoneAudit.IPv6Addresses) > 0 {
+			fmt.Fprintf(tw, "IPv6 (AAAA)\t%s\n", strings.Join(info.ZoneAudit.IPv6Addresses, ", "))
+		} else {
+			fmt.Fprintf(tw, "IPv6 (AAAA)\tNone (IPv4 only)\n")
+		}
+		if info.ZoneAudit.SOA != nil {
+			fmt.Fprintf(tw, "SOA Primary NS\t%s (Admin: %s, Serial: %d)\n",
+				info.ZoneAudit.SOA.PrimaryNS, info.ZoneAudit.SOA.AdminEmail, info.ZoneAudit.SOA.Serial)
+		}
+		fmt.Fprintf(tw, "DNSSEC Status\t[%s] %s\n", info.ZoneAudit.DNSSECStatus, info.ZoneAudit.DNSSECSummary)
+		if info.ZoneAudit.AXFRChecked {
+			fmt.Fprintf(tw, "Zone Transfer (AXFR)\t%s\n", info.ZoneAudit.AXFRSummary)
+		}
+	}
+
 	// --- EMAIL SECTION ---
 	fmt.Fprintln(tw, "\n==================================================")
 	fmt.Fprintf(tw, "CATEGORY: EMAIL\n")

@@ -133,6 +133,7 @@ type ScanRunnerFunc struct {
 	InspectTLS            func(target string) (analyzer.TLSInfo, error)
 	TraceHTTPChain        func(target string) *analyzer.HTTPTraceResult
 	InspectEmail          func(domain string) analyzer.EmailInfo
+	InspectZone           func(domain string) *analyzer.DNSSECAndZoneAudit
 	LookupVulnerabilities func(details []analyzer.TechDetail) ([]analyzer.Vulnerability, error)
 }
 
@@ -193,6 +194,7 @@ func NewDesktopApp(store *storage.Store) *DesktopApp {
 			InspectTLS:            analyzer.InspectTLS,
 			TraceHTTPChain:        analyzer.TraceHTTPChain,
 			InspectEmail:          analyzer.InspectEmailDeliverability,
+			InspectZone:           analyzer.InspectDNSSECAndZone,
 			LookupVulnerabilities: analyzer.LookupVulnerabilities,
 		},
 	}
@@ -825,6 +827,47 @@ func (app *DesktopApp) StartHTTPTrace(scanID int64) {
 	}()
 }
 
+// StartZoneAudit runs a DNSSEC chain-of-trust, SOA timer, IPv6 AAAA parity, and AXFR zone transfer audit for the current domain scan.
+func (app *DesktopApp) StartZoneAudit(scanID int64) {
+	if app.currentScan == nil || app.currentScan.ID != scanID || app.currentScan.DomainInfo == nil || app.scanning {
+		return
+	}
+	rec := app.currentScan
+	domain := rec.DomainInfo.Domain
+	if domain == "" {
+		domain = rec.Target
+	}
+	app.scanning = true
+	app.statusText = fmt.Sprintf("Auditing DNSSEC, SOA, IPv6 AAAA & AXFR zone transfers for %s...", domain)
+
+	go func() {
+		zoneFn := app.runner.InspectZone
+		if zoneFn == nil {
+			zoneFn = analyzer.InspectDNSSECAndZone
+		}
+		zoneRes := zoneFn(domain)
+
+		var saveErr error
+		if app.store != nil && rec.DomainInfo != nil {
+			rec.DomainInfo.Lock()
+			rec.DomainInfo.ZoneAudit = zoneRes
+			rec.DomainInfo.Unlock()
+			saveErr = app.store.UpdateDomainScan(scanID, rec.DomainInfo, "", rec.CheckVulns)
+		}
+
+		app.runOnUI(func() {
+			app.scanning = false
+			if saveErr != nil {
+				app.statusText = fmt.Sprintf("Zone audit save error: %v", saveErr)
+				return
+			}
+			app.statusText = fmt.Sprintf("Completed DNSSEC & Zone audit for %s (%s)", domain, zoneRes.DNSSECStatus)
+			app.RefreshHistory()
+			app.SelectScan(scanID)
+		})
+	}()
+}
+
 // StartEmailDeepDive runs a deep-dive email deliverability & authentication audit (MX, SPF, DMARC, DKIM, MTA-STS, TLS-RPT, BIMI).
 func (app *DesktopApp) StartEmailDeepDive(scanID int64) {
 	if app.currentScan == nil || app.currentScan.ID != scanID || app.currentScan.DomainInfo == nil || app.scanning {
@@ -1314,6 +1357,9 @@ func (app *DesktopApp) renderDomainDetails(c *ui.Context, t *ui.Theme, scanID in
 			app.renderKeyValue(c, t, "CAA Records", strings.Join(info.DNS.CAARecord.RawRecords, "; "))
 		}
 	})
+
+	// 2b. DNSSEC, SOA, IPv6 (AAAA) & Zone Transfer (AXFR) Audit
+	app.renderZoneAuditCard(c, t, scanID, info)
 
 	// 3. Passive Subdomain Enumeration (Certificate Transparency & DNS)
 	app.renderSubdomainEnumerationCard(c, t, scanID, info)
@@ -2133,6 +2179,176 @@ func (app *DesktopApp) renderPingAndTracerouteCards(c *ui.Context, t *ui.Theme, 
 					})
 				}
 			}
+		}
+	})
+}
+
+func (app *DesktopApp) renderZoneAuditCard(c *ui.Context, t *ui.Theme, scanID int64, info *analyzer.DomainInfo) {
+	za := info.ZoneAudit
+
+	app.renderSectionCard(c, t, "DNSSEC, SOA, IPv6 (AAAA) & Zone Transfer (AXFR) Audit", func() {
+		ui.Row(c).FillWidth().Gap(10).AlignItems(ui.Center).Wrap().Children(func() {
+			btnLabel := "Audit DNSSEC & Zone"
+			if za != nil && za.Audited {
+				btnLabel = "Re-audit Zone ↻"
+			}
+			if ui.PrimaryButton(c, btnLabel).Disabled(app.scanning).Clicked() {
+				app.StartZoneAudit(scanID)
+			}
+
+			if za == nil {
+				ui.Text(c, "Click 'Audit DNSSEC & Zone' to verify DNSSEC chain of trust (DS/DNSKEY/RRSIG), SOA timers, IPv6 AAAA parity, and open AXFR zone transfers.").
+					FontSize(app.fs(12)).
+					TextColor(t.TextMuted)
+			} else {
+				ui.Badge(c, "DNSSEC: "+za.DNSSECStatus)
+				if za.HasIPv6 {
+					ui.Badge(c, fmt.Sprintf("IPv6 (AAAA): %d IPs", len(za.IPv6Addresses)+len(za.WWWIPv6Addresses)))
+				} else {
+					ui.Badge(c, "IPv6 (AAAA): None")
+				}
+				if za.AXFRChecked {
+					if za.AXFRVulnerable {
+						ui.Badge(c, "AXFR: VULNERABLE")
+					} else {
+						ui.Badge(c, "AXFR: Refused (Secure)")
+					}
+				}
+				if za.SOA != nil && za.SOA.Serial > 0 {
+					ui.Badge(c, fmt.Sprintf("SOA Serial: %d", za.SOA.Serial))
+				}
+			}
+		})
+
+		if za == nil {
+			return
+		}
+
+		// 1. IPv6 (AAAA) Parity
+		ui.Box(c).FillWidth().Padding(8).Radius(6).Border(1, t.Border).Children(func() {
+			ui.Column(c).FillWidth().Gap(6).Children(func() {
+				ui.Row(c).FillWidth().Gap(8).AlignItems(ui.Center).Wrap().Children(func() {
+					ui.Text(c, "IPv6 (AAAA) Dual-Stack Parity").FontSize(app.fs(13)).Bold()
+					if za.HasIPv6 {
+						ui.Badge(c, "DUAL-STACK (IPv4 + IPv6)")
+					} else {
+						ui.Badge(c, "IPv4 ONLY")
+					}
+				})
+
+				if !za.HasIPv6 {
+					ui.Text(c, "No AAAA (IPv6) records resolved for this host.").FontSize(app.fs(12)).TextColor(t.TextMuted)
+				} else {
+					for _, ip6 := range za.IPv6Addresses {
+						app.renderPivotActionRow(c, t, scanID, "AAAA Record IPv6", ip6, "AAAA Record")
+					}
+					for _, ip6 := range za.WWWIPv6Addresses {
+						app.renderPivotActionRow(c, t, scanID, "WWW AAAA IPv6", ip6, "WWW AAAA Record")
+					}
+				}
+			})
+		})
+
+		// 2. DNSSEC Chain of Trust (DS, DNSKEY, RRSIG)
+		ui.Box(c).FillWidth().Padding(8).Radius(6).Border(1, t.Border).Children(func() {
+			ui.Column(c).FillWidth().Gap(6).Children(func() {
+				ui.Row(c).FillWidth().Gap(8).AlignItems(ui.Center).Wrap().Children(func() {
+					ui.Text(c, "DNSSEC Chain of Trust (DS, DNSKEY, RRSIG)").FontSize(app.fs(13)).Bold()
+					ui.Badge(c, za.DNSSECStatus)
+					if za.DNSSECValidated {
+						ui.Badge(c, "AD Bit Validated")
+					}
+					if za.RRSIGCount > 0 {
+						ui.Badge(c, fmt.Sprintf("%d RRSIGs", za.RRSIGCount))
+					}
+				})
+
+				if za.DNSSECSummary != "" {
+					app.renderKeyValue(c, t, "DNSSEC Summary", za.DNSSECSummary)
+				}
+
+				if len(za.DSRecords) > 0 {
+					ui.Text(c, fmt.Sprintf("Parent Zone DS Records (%d):", len(za.DSRecords))).FontSize(app.fs(12)).TextColor(t.TextMuted)
+					for _, d := range za.DSRecords {
+						ds := d
+						ui.Row(c).Key(fmt.Sprintf("ds:%d:%s", ds.KeyTag, ds.Digest)).FillWidth().Gap(8).AlignItems(ui.Center).Wrap().Children(func() {
+							ui.Badge(c, fmt.Sprintf("KeyTag: %d", ds.KeyTag))
+							ui.Badge(c, ds.AlgoName)
+							ui.Badge(c, ds.DigestName)
+							ui.Text(c, ds.Digest).FontSize(app.fs(11)).TextColor(t.TextMuted).Selectable()
+						})
+					}
+				}
+
+				if len(za.DNSKEYRecords) > 0 {
+					ui.Text(c, fmt.Sprintf("Zone DNSKEY Records (%d):", len(za.DNSKEYRecords))).FontSize(app.fs(12)).TextColor(t.TextMuted)
+					for _, k := range za.DNSKEYRecords {
+						keyRec := k
+						ui.Row(c).Key(fmt.Sprintf("dnskey:%d:%d", keyRec.KeyTag, keyRec.Flags)).FillWidth().Gap(8).AlignItems(ui.Center).Wrap().Children(func() {
+							ui.Badge(c, keyRec.Role)
+							ui.Badge(c, fmt.Sprintf("KeyTag: %d", keyRec.KeyTag))
+							ui.Badge(c, keyRec.AlgoName)
+							if keyRec.PublicKey != "" {
+								ui.Text(c, keyRec.PublicKey).FontSize(app.fs(11)).TextColor(t.TextMuted).Selectable()
+							}
+						})
+					}
+				}
+			})
+		})
+
+		// 3. Start of Authority (SOA) Record & Zone Timers
+		if za.SOA != nil {
+			ui.Box(c).FillWidth().Padding(8).Radius(6).Border(1, t.Border).Children(func() {
+				ui.Column(c).FillWidth().Gap(6).Children(func() {
+					ui.Row(c).FillWidth().Gap(8).AlignItems(ui.Center).Wrap().Children(func() {
+						ui.Text(c, "Start of Authority (SOA) & Zone Timers").FontSize(app.fs(13)).Bold()
+						ui.Badge(c, fmt.Sprintf("Serial: %d", za.SOA.Serial))
+					})
+
+					if za.SOA.PrimaryNS != "" {
+						app.renderPivotActionRow(c, t, scanID, "Primary NS (MNAME)", za.SOA.PrimaryNS, "SOA Primary NS")
+					}
+					if za.SOA.AdminEmail != "" {
+						app.renderKeyValue(c, t, "Hostmaster (RNAME)", za.SOA.AdminEmail)
+					}
+					app.renderKeyValue(c, t, "Zone Timers",
+						fmt.Sprintf("Refresh: %ds | Retry: %ds | Expire: %ds | Negative Cache Min-TTL: %ds",
+							za.SOA.Refresh, za.SOA.Retry, za.SOA.Expire, za.SOA.MinTTL))
+				})
+			})
+		}
+
+		// 4. Authoritative Nameservers Open Zone Transfer (AXFR) Check
+		if za.AXFRChecked {
+			borderCol := t.Border
+			if za.AXFRVulnerable {
+				borderCol = t.Danger
+			}
+			ui.Box(c).FillWidth().Padding(8).Radius(6).Border(1, borderCol).Children(func() {
+				ui.Column(c).FillWidth().Gap(6).Children(func() {
+					ui.Row(c).FillWidth().Gap(8).AlignItems(ui.Center).Wrap().Children(func() {
+						ui.Text(c, "Authoritative Zone Transfer (AXFR) Security Check").FontSize(app.fs(13)).Bold()
+						if za.AXFRVulnerable {
+							ui.Badge(c, "VULNERABLE (OPEN AXFR)")
+						} else {
+							ui.Badge(c, "SECURE (AXFR REFUSED)")
+						}
+					})
+
+					if za.AXFRSummary != "" {
+						ui.Text(c, za.AXFRSummary).FontSize(app.fs(12)).TextColor(t.TextMuted)
+					}
+
+					for _, ar := range za.AXFRResults {
+						axfrItem := ar
+						ui.Row(c).Key("axfr:" + axfrItem.Nameserver).FillWidth().Gap(8).AlignItems(ui.Center).Wrap().Children(func() {
+							ui.Text(c, axfrItem.Nameserver).FontSize(app.fs(12)).Bold().Selectable()
+							ui.Badge(c, axfrItem.Status)
+						})
+					}
+				})
+			})
 		}
 	})
 }

@@ -109,6 +109,7 @@ type DomainInfo struct {
 	ExpiryDate string `json:"expiry_date,omitempty"`
 
 	DNS             DNSInfo               `json:"dns"`
+	ZoneAudit       *DNSSECAndZoneAudit   `json:"zone_audit,omitempty"`
 	Web             WebInfo               `json:"web"`
 	WAF             WAFInfo               `json:"waf"`
 	TLS             TLSInfo               `json:"tls"`
@@ -134,7 +135,7 @@ func Analyze(domain string, checkVulns bool) *DomainInfo {
 	}
 
 	var wg sync.WaitGroup
-	wg.Add(13)
+	wg.Add(14)
 	if checkVulns {
 		wg.Add(1)
 	}
@@ -251,7 +252,16 @@ func Analyze(domain string, checkVulns bool) *DomainInfo {
 		info.Unlock()
 	}()
 
-	// 14. Vulnerabilities (Conditional)
+	// 14. DNSSEC, SOA, IPv6 AAAA & Zone Transfer (AXFR) Audit
+	go func() {
+		defer wg.Done()
+		zoneAudit := InspectDNSSECAndZone(domain)
+		info.Lock()
+		info.ZoneAudit = zoneAudit
+		info.Unlock()
+	}()
+
+	// 15. Vulnerabilities (Conditional)
 	if checkVulns {
 		go func() {
 			defer wg.Done()

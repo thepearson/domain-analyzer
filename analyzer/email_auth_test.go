@@ -73,4 +73,3 @@ func TestParseTLSRPTAndBIMI(t *testing.T) {
 		t.Errorf("unexpected BIMI URLs: %+v", bimi)
 	}
 }
-

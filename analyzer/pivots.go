@@ -75,9 +75,20 @@ func ExtractDomainPivots(info *DomainInfo) []PivotTarget {
 	// 1. Apex Domain (if different from scanned subdomain)
 	addDomain(info.ApexDomain, "Apex Domain")
 
-	// 2. DNS IP addresses
+	// 2. DNS IP addresses (IPv4 & IPv6 AAAA)
 	addIP(info.DNS.IPAddress, "A Record")
 	addIP(info.DNS.WWWAddress, "WWW Record")
+	if info.ZoneAudit != nil {
+		for _, ip6 := range info.ZoneAudit.IPv6Addresses {
+			addIP(ip6, "AAAA Record")
+		}
+		for _, ip6 := range info.ZoneAudit.WWWIPv6Addresses {
+			addIP(ip6, "WWW AAAA Record")
+		}
+		if info.ZoneAudit.SOA != nil && info.ZoneAudit.SOA.PrimaryNS != "" {
+			addDomain(info.ZoneAudit.SOA.PrimaryNS, "SOA Primary NS")
+		}
+	}
 
 	// 3. CNAME chain
 	for _, cname := range info.WAF.CNAMEs {

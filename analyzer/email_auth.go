@@ -414,4 +414,3 @@ func ParseBIMI(raw string) BIMIDetails {
 	}
 	return d
 }
-

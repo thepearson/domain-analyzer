@@ -226,7 +226,7 @@ func (s *Store) UpdateDomainScan(id int64, info *analyzer.DomainInfo, reason str
 	if info == nil {
 		return fmt.Errorf("domain info is nil")
 	}
-	if info.Ping == nil || info.Traceroute == nil || info.Subdomains == nil || info.Metadata == nil || info.HTTPTrace == nil || !info.VulnsChecked || !info.Email.DeepChecked {
+	if info.Ping == nil || info.Traceroute == nil || info.Subdomains == nil || info.Metadata == nil || info.HTTPTrace == nil || info.ZoneAudit == nil || !info.VulnsChecked || !info.Email.DeepChecked {
 		if existingRec, err := s.GetScan(id); err == nil && existingRec.DomainInfo != nil {
 			if info.Ping == nil {
 				info.Ping = existingRec.DomainInfo.Ping
@@ -242,6 +242,9 @@ func (s *Store) UpdateDomainScan(id int64, info *analyzer.DomainInfo, reason str
 			}
 			if info.HTTPTrace == nil {
 				info.HTTPTrace = existingRec.DomainInfo.HTTPTrace
+			}
+			if info.ZoneAudit == nil {
+				info.ZoneAudit = existingRec.DomainInfo.ZoneAudit
 			}
 			if !info.VulnsChecked && existingRec.DomainInfo.VulnsChecked {
 				info.VulnsChecked = true

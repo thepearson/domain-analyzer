@@ -130,6 +130,7 @@ func TestDesktopAppDrillDownAndFeatures(t *testing.T) {
 	tlsDoneCh := make(chan struct{}, 2)
 	httpDoneCh := make(chan struct{}, 2)
 	emailDoneCh := make(chan struct{}, 2)
+	zoneDoneCh := make(chan struct{}, 2)
 	vulnDoneCh := make(chan struct{}, 2)
 	app.runner = ScanRunnerFunc{
 		AnalyzeDomain: func(domain string, checkVulns bool) *analyzer.DomainInfo {
@@ -340,6 +341,56 @@ func TestDesktopAppDrillDownAndFeatures(t *testing.T) {
 				},
 			}
 		},
+		InspectZone: func(domain string) *analyzer.DNSSECAndZoneAudit {
+			defer func() { zoneDoneCh <- struct{}{} }()
+			return &analyzer.DNSSECAndZoneAudit{
+				Audited:         true,
+				Domain:          domain,
+				ApexDomain:      "example.co.nz",
+				HasIPv6:         true,
+				IPv6Addresses:   []string{"2606:2800:220:1:248:1893:25c8:1946"},
+				DNSSECEnabled:   true,
+				DNSSECValidated: true,
+				DNSSECStatus:    "Secure (Signed & Validated)",
+				DNSSECSummary:   "Full DNSSEC chain of trust verified (1 DS, 2 DNSKEY, 2 RRSIG records)",
+				RRSIGCount:      2,
+				DSRecords: []analyzer.DSRecordInfo{
+					{
+						KeyTag:     2371,
+						Algorithm:  13,
+						AlgoName:   "ECDSAP256SHA256 (13)",
+						DigestType: 2,
+						DigestName: "SHA-256 (2)",
+						Digest:     "1F9876543210ABCDEF",
+					},
+				},
+				DNSKEYRecords: []analyzer.DNSKEYRecordInfo{
+					{
+						Role:      "KSK (257)",
+						Flags:     257,
+						KeyTag:    2371,
+						Algorithm: 13,
+						AlgoName:  "ECDSAP256SHA256 (13)",
+					},
+				},
+				SOA: &analyzer.SOADetails{
+					PrimaryNS:  "ns1.example.co.nz",
+					AdminEmail: "hostmaster@example.co.nz",
+					Serial:     2026103101,
+					Refresh:    7200,
+					Retry:      3600,
+					Expire:     1209600,
+					MinTTL:     3600,
+				},
+				AXFRChecked:    true,
+				AXFRVulnerable: false,
+				AXFRSummary:    "Secure: All 2 authoritative nameservers properly refused AXFR zone transfers",
+				AXFRResults: []analyzer.AXFRServerResult{
+					{Nameserver: "ns1.example.co.nz", Vulnerable: false, Status: "Refused (Secure)"},
+					{Nameserver: "ns2.example.co.nz", Vulnerable: false, Status: "Refused (Secure)"},
+				},
+			}
+		},
 		LookupVulnerabilities: func(details []analyzer.TechDetail) ([]analyzer.Vulnerability, error) {
 			defer func() { vulnDoneCh <- struct{}{} }()
 			return []analyzer.Vulnerability{
@@ -353,7 +404,7 @@ func TestDesktopAppDrillDownAndFeatures(t *testing.T) {
 		},
 	}
 
-	tester := ui.NewTester(app.View, 1280, 4200)
+	tester := ui.NewTester(app.View, 1280, 4800)
 
 	// Verify initial seeded scan, .nz WHOIS link, and OWASP challenge links are displayed
 	if !tester.HasText("portal.example.co.nz") {
@@ -576,6 +627,21 @@ func TestDesktopAppDrillDownAndFeatures(t *testing.T) {
 	tester.Frame()
 	if !tester.HasText("google._domainkey.example.co.nz") || !tester.HasText("MTA-STS: enforce") || !tester.HasText("BIMI: Present") {
 		t.Errorf("expected DKIM selector, MTA-STS enforce mode, and BIMI badge to be rendered on scan page")
+	}
+
+	// Run DNSSEC, SOA, IPv6 (AAAA) & Zone Transfer (AXFR) Audit
+	if err := tester.Click("Audit DNSSEC & Zone"); err != nil {
+		t.Fatalf("clicking 'Audit DNSSEC & Zone' failed: %v", err)
+	}
+	select {
+	case <-zoneDoneCh:
+	case <-time.After(3 * time.Second):
+		t.Fatalf("timed out waiting for background DNSSEC & Zone Audit")
+	}
+	time.Sleep(50 * time.Millisecond)
+	tester.Frame()
+	if !tester.HasText("DNSSEC: Secure (Signed & Validated)") || !tester.HasText("2606:2800:220:1:248:1893:25c8:1946") || !tester.HasText("AXFR: Refused (Secure)") {
+		t.Errorf("expected DNSSEC status, IPv6 AAAA address, and AXFR status badge to be rendered on scan page")
 	}
 
 	// Verify favicon persisted across sessions in scan list
