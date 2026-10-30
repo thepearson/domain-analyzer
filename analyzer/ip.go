@@ -16,18 +16,20 @@ import (
 
 type IPInfo struct {
 	mu              sync.Mutex
-	IP              string          `json:"ip"`
-	PTRRecords      []string        `json:"ptr_records,omitempty"`
-	Owner           string          `json:"owner,omitempty"`
-	ASN             string          `json:"asn,omitempty"`
-	CIDR            string          `json:"cidr,omitempty"`
-	Country         string          `json:"country,omitempty"`
-	TLS             TLSInfo         `json:"tls"`
-	Web             WebInfo         `json:"web"`
-	WAF             WAFInfo         `json:"waf"`
-	PortScanned     bool            `json:"port_scanned,omitempty"`
-	OpenPorts       []PortService   `json:"open_ports,omitempty"`
-	Vulnerabilities []Vulnerability `json:"vulnerabilities,omitempty"`
+	IP              string            `json:"ip"`
+	PTRRecords      []string          `json:"ptr_records,omitempty"`
+	Owner           string            `json:"owner,omitempty"`
+	ASN             string            `json:"asn,omitempty"`
+	CIDR            string            `json:"cidr,omitempty"`
+	Country         string            `json:"country,omitempty"`
+	TLS             TLSInfo           `json:"tls"`
+	Web             WebInfo           `json:"web"`
+	WAF             WAFInfo           `json:"waf"`
+	Ping            *PingResult       `json:"ping,omitempty"`
+	Traceroute      *TracerouteResult `json:"traceroute,omitempty"`
+	PortScanned     bool              `json:"port_scanned,omitempty"`
+	OpenPorts       []PortService     `json:"open_ports,omitempty"`
+	Vulnerabilities []Vulnerability   `json:"vulnerabilities,omitempty"`
 }
 
 func (info *IPInfo) Lock() {
@@ -64,7 +66,7 @@ func AnalyzeIP(ip string, checkVulns bool) *IPInfo {
 	}
 
 	var wg sync.WaitGroup
-	wg.Add(5)
+	wg.Add(6)
 
 	// 1. Reverse DNS (PTR)
 	go func() {
@@ -269,6 +271,15 @@ func AnalyzeIP(ip string, checkVulns bool) *IPInfo {
 		wafInfo.ProbeURL = testURL
 		info.Lock()
 		info.WAF = wafInfo
+		info.Unlock()
+	}()
+
+	// 6. Ping / Connectivity Latency
+	go func() {
+		defer wg.Done()
+		pingRes := RunPing(cleanIP)
+		info.Lock()
+		info.Ping = pingRes
 		info.Unlock()
 	}()
 

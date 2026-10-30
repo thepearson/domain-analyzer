@@ -82,12 +82,14 @@ type DomainInfo struct {
 	Registrar  string `json:"registrar,omitempty"`
 	ExpiryDate string `json:"expiry_date,omitempty"`
 
-	DNS             DNSInfo         `json:"dns"`
-	Web             WebInfo         `json:"web"`
-	WAF             WAFInfo         `json:"waf"`
-	TLS             TLSInfo         `json:"tls"`
-	Email           EmailInfo       `json:"email"`
-	Vulnerabilities []Vulnerability `json:"vulnerabilities,omitempty"`
+	DNS             DNSInfo           `json:"dns"`
+	Web             WebInfo           `json:"web"`
+	WAF             WAFInfo           `json:"waf"`
+	TLS             TLSInfo           `json:"tls"`
+	Email           EmailInfo         `json:"email"`
+	Ping            *PingResult       `json:"ping,omitempty"`
+	Traceroute      *TracerouteResult `json:"traceroute,omitempty"`
+	Vulnerabilities []Vulnerability   `json:"vulnerabilities,omitempty"`
 }
 
 func Analyze(domain string, checkVulns bool) *DomainInfo {
@@ -102,7 +104,7 @@ func Analyze(domain string, checkVulns bool) *DomainInfo {
 	}
 
 	var wg sync.WaitGroup
-	wg.Add(10)
+	wg.Add(11)
 	if checkVulns {
 		wg.Add(1)
 	}
@@ -192,7 +194,16 @@ func Analyze(domain string, checkVulns bool) *DomainInfo {
 		}
 	}()
 
-	// 11. Vulnerabilities (Conditional)
+	// 11. Ping / Connectivity Latency
+	go func() {
+		defer wg.Done()
+		pingRes := RunPing(domain)
+		info.Lock()
+		info.Ping = pingRes
+		info.Unlock()
+	}()
+
+	// 12. Vulnerabilities (Conditional)
 	if checkVulns {
 		go func() {
 			defer wg.Done()

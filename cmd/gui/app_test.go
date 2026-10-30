@@ -123,6 +123,8 @@ func TestDesktopAppDrillDownAndFeatures(t *testing.T) {
 	app := NewDesktopApp(store)
 	doneCh := make(chan struct{}, 4)
 	portDoneCh := make(chan struct{}, 2)
+	pingDoneCh := make(chan struct{}, 2)
+	traceDoneCh := make(chan struct{}, 2)
 	app.runner = ScanRunnerFunc{
 		AnalyzeDomain: func(domain string, checkVulns bool) *analyzer.DomainInfo {
 			defer func() { doneCh <- struct{}{} }()
@@ -147,9 +149,37 @@ func TestDesktopAppDrillDownAndFeatures(t *testing.T) {
 				{Port: 443, Service: "HTTPS", State: "open"},
 			}
 		},
+		RunPing: func(target string) *analyzer.PingResult {
+			defer func() { pingDoneCh <- struct{}{} }()
+			return &analyzer.PingResult{
+				Target:      target,
+				ResolvedIP:  "93.184.216.34",
+				Method:      "ICMP",
+				Reachable:   true,
+				PacketsSent: 4,
+				PacketsRecv: 4,
+				LossPercent: 0,
+				MinRTT:      "11.20 ms",
+				AvgRTT:      "11.80 ms",
+				MaxRTT:      "12.50 ms",
+			}
+		},
+		RunTraceroute: func(target string) *analyzer.TracerouteResult {
+			defer func() { traceDoneCh <- struct{}{} }()
+			return &analyzer.TracerouteResult{
+				Target:     target,
+				ResolvedIP: "93.184.216.34",
+				Method:     "tracepath",
+				Completed:  true,
+				Hops: []analyzer.TracerouteHop{
+					{Hop: 1, IP: "203.0.113.1", Host: "gw.isp.example.net", RTT: "2.10 ms"},
+					{Hop: 2, IP: "93.184.216.34", Host: "origin.example.co.nz", RTT: "11.80 ms"},
+				},
+			}
+		},
 	}
 
-	tester := ui.NewTester(app.View, 1280, 820)
+	tester := ui.NewTester(app.View, 1280, 1400)
 
 	// Verify initial seeded scan, .nz WHOIS link, and OWASP challenge links are displayed
 	if !tester.HasText("portal.example.co.nz") {
@@ -253,6 +283,35 @@ func TestDesktopAppDrillDownAndFeatures(t *testing.T) {
 	}
 	if !strings.Contains(app.rawJSONReadOnly, `"child_scans"`) || !strings.Contains(app.rawJSONReadOnly, `"SSH-2.0-OpenSSH_9.6"`) {
 		t.Errorf("expected parent scan JSON export to include child IP scan and port scan data, got:\n%s", app.rawJSONReadOnly)
+	}
+
+	// Run Ping and Traceroute on the domain scan page
+	if err := tester.Click("Run Ping"); err != nil {
+		t.Fatalf("clicking 'Run Ping' failed: %v", err)
+	}
+	select {
+	case <-pingDoneCh:
+	case <-time.After(3 * time.Second):
+		t.Fatalf("timed out waiting for background Ping")
+	}
+	time.Sleep(50 * time.Millisecond)
+	tester.Frame()
+	if !tester.HasText("11.20 ms / 11.80 ms / 12.50 ms") {
+		t.Errorf("expected Ping RTT summary to be rendered on scan page")
+	}
+
+	if err := tester.Click("Run Traceroute"); err != nil {
+		t.Fatalf("clicking 'Run Traceroute' failed: %v", err)
+	}
+	select {
+	case <-traceDoneCh:
+	case <-time.After(3 * time.Second):
+		t.Fatalf("timed out waiting for background Traceroute")
+	}
+	time.Sleep(50 * time.Millisecond)
+	tester.Frame()
+	if !tester.HasText("203.0.113.1") || !tester.HasText("(gw.isp.example.net)") {
+		t.Errorf("expected Traceroute hop IP and hostname to be rendered on scan page")
 	}
 
 	// Verify favicon persisted across sessions in scan list

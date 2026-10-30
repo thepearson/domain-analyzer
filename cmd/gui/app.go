@@ -121,11 +121,13 @@ func buildOWASPChallengeLinks(target string, wafInfo analyzer.WAFInfo) []owaspCh
 	}
 }
 
-// ScanRunnerFunc abstracts domain, IP, and port scanning so unit tests can inject fast mocks if desired.
+// ScanRunnerFunc abstracts domain, IP, port, ping, and traceroute operations so unit tests can inject fast mocks if desired.
 type ScanRunnerFunc struct {
 	AnalyzeDomain func(domain string, checkVulns bool) *analyzer.DomainInfo
 	AnalyzeIP     func(ip string, checkVulns bool) *analyzer.IPInfo
 	ScanPorts     func(ip string) []analyzer.PortService
+	RunPing       func(target string) *analyzer.PingResult
+	RunTraceroute func(target string) *analyzer.TracerouteResult
 }
 
 type cachedFavicon struct {
@@ -178,6 +180,8 @@ func NewDesktopApp(store *storage.Store) *DesktopApp {
 			AnalyzeDomain: analyzer.Analyze,
 			AnalyzeIP:     analyzer.AnalyzeIP,
 			ScanPorts:     analyzer.ScanPorts,
+			RunPing:       analyzer.RunPing,
+			RunTraceroute: analyzer.RunTraceroute,
 		},
 	}
 	app.RefreshHistory()
@@ -533,6 +537,96 @@ func (app *DesktopApp) StartPortScan(scanID int64, info *analyzer.IPInfo, checkV
 				return
 			}
 			app.statusText = fmt.Sprintf("Port scan completed on %s (%d open ports)", targetIP, len(ports))
+			app.RefreshHistory()
+			app.SelectScan(scanID)
+		})
+	}()
+}
+
+// StartPing runs a Ping latency check against the currently selected domain or IP scan and persists the result.
+func (app *DesktopApp) StartPing(scanID int64) {
+	if app.currentScan == nil || app.currentScan.ID != scanID || app.scanning {
+		return
+	}
+	rec := app.currentScan
+	target := rec.Target
+	app.scanning = true
+	app.statusText = fmt.Sprintf("Pinging %s...", target)
+
+	go func() {
+		pingFn := app.runner.RunPing
+		if pingFn == nil {
+			pingFn = analyzer.RunPing
+		}
+		pingRes := pingFn(target)
+
+		var saveErr error
+		if app.store != nil {
+			if rec.TargetType == analyzer.TargetTypeIP && rec.IPInfo != nil {
+				rec.IPInfo.Lock()
+				rec.IPInfo.Ping = pingRes
+				rec.IPInfo.Unlock()
+				saveErr = app.store.UpdateIPScan(scanID, rec.IPInfo, "", rec.CheckVulns)
+			} else if rec.DomainInfo != nil {
+				rec.DomainInfo.Lock()
+				rec.DomainInfo.Ping = pingRes
+				rec.DomainInfo.Unlock()
+				saveErr = app.store.UpdateDomainScan(scanID, rec.DomainInfo, "", rec.CheckVulns)
+			}
+		}
+
+		app.runOnUI(func() {
+			app.scanning = false
+			if saveErr != nil {
+				app.statusText = fmt.Sprintf("Ping save error: %v", saveErr)
+				return
+			}
+			app.statusText = fmt.Sprintf("Ping completed for %s", target)
+			app.RefreshHistory()
+			app.SelectScan(scanID)
+		})
+	}()
+}
+
+// StartTraceroute runs a Traceroute network path check against the currently selected domain or IP scan and persists the result.
+func (app *DesktopApp) StartTraceroute(scanID int64) {
+	if app.currentScan == nil || app.currentScan.ID != scanID || app.scanning {
+		return
+	}
+	rec := app.currentScan
+	target := rec.Target
+	app.scanning = true
+	app.statusText = fmt.Sprintf("Running traceroute to %s...", target)
+
+	go func() {
+		traceFn := app.runner.RunTraceroute
+		if traceFn == nil {
+			traceFn = analyzer.RunTraceroute
+		}
+		traceRes := traceFn(target)
+
+		var saveErr error
+		if app.store != nil {
+			if rec.TargetType == analyzer.TargetTypeIP && rec.IPInfo != nil {
+				rec.IPInfo.Lock()
+				rec.IPInfo.Traceroute = traceRes
+				rec.IPInfo.Unlock()
+				saveErr = app.store.UpdateIPScan(scanID, rec.IPInfo, "", rec.CheckVulns)
+			} else if rec.DomainInfo != nil {
+				rec.DomainInfo.Lock()
+				rec.DomainInfo.Traceroute = traceRes
+				rec.DomainInfo.Unlock()
+				saveErr = app.store.UpdateDomainScan(scanID, rec.DomainInfo, "", rec.CheckVulns)
+			}
+		}
+
+		app.runOnUI(func() {
+			app.scanning = false
+			if saveErr != nil {
+				app.statusText = fmt.Sprintf("Traceroute save error: %v", saveErr)
+				return
+			}
+			app.statusText = fmt.Sprintf("Traceroute completed for %s (%d hops)", target, len(traceRes.Hops))
 			app.RefreshHistory()
 			app.SelectScan(scanID)
 		})
@@ -931,7 +1025,10 @@ func (app *DesktopApp) renderDomainDetails(c *ui.Context, t *ui.Theme, scanID in
 		}
 	})
 
-	// 3. WAF & Edge Protection (with CNAME chain drill-downs & OWASP Browser Challenges)
+	// 3. Ping & Traceroute Network Diagnostics
+	app.renderPingAndTracerouteCards(c, t, scanID, info.Domain, info.Ping, info.Traceroute)
+
+	// 4. WAF & Edge Protection (with CNAME chain drill-downs & OWASP Browser Challenges)
 	app.renderSectionCard(c, t, "WAF & Edge Protection", func() {
 		app.renderKeyValue(c, t, "WAF Summary", info.WAF.Summary)
 		if info.WAF.BaselineStatus > 0 || info.WAF.ProbeStatus > 0 {
@@ -1035,7 +1132,7 @@ func (app *DesktopApp) renderDomainDetails(c *ui.Context, t *ui.Theme, scanID in
 		}
 	})
 
-	// 7. Vulnerabilities (CVEs)
+	// 8. Vulnerabilities (CVEs)
 	if len(info.Vulnerabilities) > 0 {
 		app.renderVulnerabilitiesCard(c, t, info.Vulnerabilities)
 	}
@@ -1105,7 +1202,10 @@ func (app *DesktopApp) renderIPDetails(c *ui.Context, t *ui.Theme, scanID int64,
 		}
 	})
 
-	// 3. Reverse DNS (PTR) Hostnames
+	// 3. Ping & Traceroute Network Diagnostics
+	app.renderPingAndTracerouteCards(c, t, scanID, info.IP, info.Ping, info.Traceroute)
+
+	// 4. Reverse DNS (PTR) Hostnames
 	app.renderSectionCard(c, t, "Reverse DNS (PTR Hostnames)", func() {
 		if len(info.PTRRecords) == 0 {
 			ui.Text(c, "No PTR records found for this IP address.").FontSize(app.fs(12)).TextColor(t.TextMuted)
@@ -1157,6 +1257,119 @@ func (app *DesktopApp) renderIPDetails(c *ui.Context, t *ui.Theme, scanID int64,
 	if len(info.Vulnerabilities) > 0 {
 		app.renderVulnerabilitiesCard(c, t, info.Vulnerabilities)
 	}
+}
+
+func (app *DesktopApp) renderPingAndTracerouteCards(c *ui.Context, t *ui.Theme, scanID int64, target string, ping *analyzer.PingResult, trace *analyzer.TracerouteResult) {
+	// Ping Section
+	app.renderSectionCard(c, t, "Ping & Latency Check", func() {
+		ui.Row(c).FillWidth().Gap(10).AlignItems(ui.Center).Wrap().Children(func() {
+			pingBtnLabel := "Run Ping"
+			if ping != nil {
+				pingBtnLabel = "Re-run Ping ↻"
+			}
+			if ui.PrimaryButton(c, pingBtnLabel).Disabled(app.scanning).Clicked() {
+				app.StartPing(scanID)
+			}
+
+			if ping == nil {
+				ui.Text(c, "Click 'Run Ping' to measure packet loss and round-trip latency.").
+					FontSize(app.fs(12)).
+					TextColor(t.TextMuted)
+			} else {
+				statusLabel := "Unreachable"
+				if ping.Reachable {
+					statusLabel = "Reachable"
+				}
+				ui.Badge(c, statusLabel)
+				if ping.Method != "" {
+					ui.Badge(c, ping.Method)
+				}
+				ui.Badge(c, fmt.Sprintf("%.0f%% Loss (%d/%d)", ping.LossPercent, ping.PacketsRecv, ping.PacketsSent))
+			}
+		})
+
+		if ping != nil {
+			if ping.ResolvedIP != "" && ping.ResolvedIP != target {
+				app.renderKeyValue(c, t, "Resolved IP", ping.ResolvedIP)
+			}
+			if ping.Reachable {
+				app.renderKeyValue(c, t, "RTT (Min / Avg / Max)", fmt.Sprintf("%s / %s / %s", ping.MinRTT, ping.AvgRTT, ping.MaxRTT))
+			}
+			if len(ping.Probes) > 0 {
+				ui.Row(c).FillWidth().Gap(8).AlignItems(ui.Center).Wrap().Children(func() {
+					ui.Text(c, "Probes:").FontSize(app.fs(12)).TextColor(t.TextMuted).MinWidth(140)
+					for _, pr := range ping.Probes {
+						probe := pr
+						label := fmt.Sprintf("#%d: %s", probe.Seq, probe.Detail)
+						ui.Badge(c, label)
+					}
+				})
+			}
+		}
+	})
+
+	// Traceroute Section
+	app.renderSectionCard(c, t, "Traceroute & Network Path", func() {
+		ui.Row(c).FillWidth().Gap(10).AlignItems(ui.Center).Wrap().Children(func() {
+			traceBtnLabel := "Run Traceroute"
+			if trace != nil {
+				traceBtnLabel = "Re-run Traceroute ↻"
+			}
+			if ui.PrimaryButton(c, traceBtnLabel).Disabled(app.scanning).Clicked() {
+				app.StartTraceroute(scanID)
+			}
+
+			if trace == nil {
+				ui.Text(c, "Click 'Run Traceroute' to map network hops and intermediate routers to this target.").
+					FontSize(app.fs(12)).
+					TextColor(t.TextMuted)
+			} else {
+				if trace.Method != "" {
+					ui.Badge(c, trace.Method)
+				}
+				ui.Badge(c, fmt.Sprintf("%d Hops", len(trace.Hops)))
+				if trace.Completed {
+					ui.Badge(c, "Reached Target")
+				}
+			}
+		})
+
+		if trace != nil {
+			if trace.Error != "" {
+				ui.Text(c, "Traceroute error: "+trace.Error).FontSize(app.fs(12)).TextColor(t.Danger)
+			} else if len(trace.Hops) == 0 {
+				ui.Text(c, "No hops returned.").FontSize(app.fs(12)).TextColor(t.TextMuted)
+			} else {
+				for _, h := range trace.Hops {
+					hop := h
+					ui.Box(c).Key(fmt.Sprintf("hop:%d:%s", hop.Hop, hop.IP)).FillWidth().Padding(8).Radius(6).Border(1, t.Border).Children(func() {
+						ui.Row(c).FillWidth().Gap(10).AlignItems(ui.Center).Wrap().Children(func() {
+							ui.Badge(c, fmt.Sprintf("#%d", hop.Hop))
+							if hop.Timeout || (hop.IP == "" && hop.Host == "") {
+								ui.Text(c, "* * * (Request Timed Out)").FontSize(app.fs(12)).TextColor(t.TextMuted)
+							} else {
+								if hop.IP != "" {
+									ui.Text(c, hop.IP).FontSize(app.fs(13)).Bold().Selectable()
+								}
+								if hop.Host != "" && hop.Host != hop.IP {
+									ui.Text(c, fmt.Sprintf("(%s)", hop.Host)).FontSize(app.fs(12)).TextColor(t.TextMuted).Selectable()
+								}
+								if hop.RTT != "" {
+									ui.Badge(c, hop.RTT)
+								}
+								ui.Spacer(c)
+								if hop.IP != "" && hop.IP != target && analyzer.IsPublicRoutableIP(hop.IP) {
+									if ui.Button(c, "Scan Hop IP ↗").Disabled(app.scanning).Clicked() {
+										app.StartScan(hop.IP, scanID, fmt.Sprintf("Traceroute Hop #%d", hop.Hop))
+									}
+								}
+							}
+						})
+					})
+				}
+			}
+		}
+	})
 }
 
 func (app *DesktopApp) renderVulnerabilitiesCard(c *ui.Context, t *ui.Theme, vulns []analyzer.Vulnerability) {

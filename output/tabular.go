@@ -140,6 +140,18 @@ func (f *TabularFormatter) Format(w io.Writer, info *analyzer.DomainInfo) error 
 		fmt.Fprintf(tw, "Downstream Note\t%s\n", note)
 	}
 
+	// --- NETWORK / PING SECTION ---
+	if info.Ping != nil {
+		fmt.Fprintln(tw, "\n==================================================")
+		fmt.Fprintf(tw, "CATEGORY: NETWORK (PING)\n")
+		fmt.Fprintln(tw, "==================================================")
+		fmt.Fprintf(tw, "Reachable\t%v (%s)\n", info.Ping.Reachable, info.Ping.Method)
+		fmt.Fprintf(tw, "Packet Loss\t%.0f%% (%d/%d received)\n", info.Ping.LossPercent, info.Ping.PacketsRecv, info.Ping.PacketsSent)
+		if info.Ping.Reachable {
+			fmt.Fprintf(tw, "Latency (Min/Avg/Max)\t%s / %s / %s\n", info.Ping.MinRTT, info.Ping.AvgRTT, info.Ping.MaxRTT)
+		}
+	}
+
 	// --- VULNERABILITIES SECTION ---
 	if len(info.Vulnerabilities) > 0 {
 		fmt.Fprintln(tw, "\n==================================================")

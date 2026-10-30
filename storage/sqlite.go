@@ -223,6 +223,16 @@ func (s *Store) UpdateDomainScan(id int64, info *analyzer.DomainInfo, reason str
 	if info == nil {
 		return fmt.Errorf("domain info is nil")
 	}
+	if info.Ping == nil || info.Traceroute == nil {
+		if existingRec, err := s.GetScan(id); err == nil && existingRec.DomainInfo != nil {
+			if info.Ping == nil {
+				info.Ping = existingRec.DomainInfo.Ping
+			}
+			if info.Traceroute == nil {
+				info.Traceroute = existingRec.DomainInfo.Traceroute
+			}
+		}
+	}
 	favicon := info.Web.Favicon
 	info.Web.Favicon = nil
 	payload, err := json.MarshalIndent(info, "", "  ")
@@ -311,6 +321,20 @@ func (s *Store) SaveIPScan(info *analyzer.IPInfo, parentID int64, reason string,
 func (s *Store) UpdateIPScan(id int64, info *analyzer.IPInfo, reason string, checkVulns bool) error {
 	if info == nil {
 		return fmt.Errorf("ip info is nil")
+	}
+	if !info.PortScanned || info.Ping == nil || info.Traceroute == nil {
+		if existingRec, err := s.GetScan(id); err == nil && existingRec.IPInfo != nil {
+			if !info.PortScanned && existingRec.IPInfo.PortScanned {
+				info.PortScanned = true
+				info.OpenPorts = existingRec.IPInfo.OpenPorts
+			}
+			if info.Ping == nil {
+				info.Ping = existingRec.IPInfo.Ping
+			}
+			if info.Traceroute == nil {
+				info.Traceroute = existingRec.IPInfo.Traceroute
+			}
+		}
 	}
 	favicon := info.Web.Favicon
 	info.Web.Favicon = nil

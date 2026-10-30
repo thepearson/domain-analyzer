@@ -138,4 +138,3 @@ func grabBanner(conn net.Conn, host string, port int) string {
 	}
 	return res
 }
-
