@@ -95,4 +95,3 @@ func TestStoreSaveAndLineage(t *testing.T) {
 		t.Errorf("expected 1 scan after deletion, got %d", len(scansAfter))
 	}
 }
-

@@ -6,6 +6,7 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -212,10 +213,22 @@ func AnalyzeIP(ip string, checkVulns bool) *IPInfo {
 			}
 		}
 
+		sort.Strings(techs)
+		sort.Slice(details, func(i, j int) bool {
+			return details[i].Name < details[j].Name
+		})
+
+		finalPageURL := targetURL
+		if resp.Request != nil && resp.Request.URL != nil {
+			finalPageURL = resp.Request.URL.String()
+		}
+		favicon := FetchFavicon(finalPageURL, body, client)
+
 		info.Lock()
 		info.Web.SecurityHeaders = secHeaders
 		info.Web.TechStack = techs
 		info.Web.TechDetails = details
+		info.Web.Favicon = favicon
 		info.Unlock()
 	}()
 
@@ -238,8 +251,11 @@ func AnalyzeIP(ip string, checkVulns bool) *IPInfo {
 		if strings.Contains(probeTargetURL, "?") {
 			sep = "&"
 		}
-		probeResp, _ := performHTTPProbe(probeTargetURL + sep + wafProbeParam)
+		testURL := probeTargetURL + sep + wafProbeParam
+		probeResp, _ := performHTTPProbe(testURL)
 		wafInfo := EvaluateWAF(nil, baseResp, probeResp)
+		wafInfo.BaselineURL = probeTargetURL
+		wafInfo.ProbeURL = testURL
 		info.Lock()
 		info.WAF = wafInfo
 		info.Unlock()

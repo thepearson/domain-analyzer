@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"sort"
 	"strings"
 	"time"
 )
@@ -103,9 +104,21 @@ func getWebInfo(domain string, info *DomainInfo) error {
 			})
 		}
 
+		sort.Strings(techs)
+		sort.Slice(details, func(i, j int) bool {
+			return details[i].Name < details[j].Name
+		})
+
+		finalPageURL := targetURL
+		if resp.Request != nil && resp.Request.URL != nil {
+			finalPageURL = resp.Request.URL.String()
+		}
+		favicon := FetchFavicon(finalPageURL, body, client)
+
 		info.Lock()
 		info.Web.TechStack = techs
 		info.Web.TechDetails = details
+		info.Web.Favicon = favicon
 		info.Unlock()
 
 	}

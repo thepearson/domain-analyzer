@@ -127,4 +127,3 @@ func TestExtractIPPivots(t *testing.T) {
 		t.Errorf("unexpected second pivot: %+v", pivots[1])
 	}
 }
-

@@ -1,7 +1,11 @@
 package main
 
 import (
+	"bytes"
+	"encoding/json"
 	"fmt"
+	"net/url"
+	"sort"
 	"strings"
 	"sync"
 
@@ -12,10 +16,121 @@ import (
 	"github.com/egoist/mygo/ui"
 )
 
+// Canonical order for HTTP Security Headers so they never jump around on mouse movement / frame redraws.
+var canonicalSecurityHeaderOrder = []string{
+	"Strict-Transport-Security",
+	"Content-Security-Policy",
+	"X-Frame-Options",
+	"X-Content-Type-Options",
+	"Referrer-Policy",
+	"Permissions-Policy",
+}
+
+type headerPair struct {
+	Key   string
+	Value string
+}
+
+func sortedSecurityHeaders(headers map[string]string) []headerPair {
+	if len(headers) == 0 {
+		return nil
+	}
+	var out []headerPair
+	seen := make(map[string]bool, len(headers))
+
+	for _, k := range canonicalSecurityHeaderOrder {
+		if v, ok := headers[k]; ok {
+			out = append(out, headerPair{Key: k, Value: v})
+			seen[k] = true
+		}
+	}
+
+	var extras []string
+	for k := range headers {
+		if !seen[k] {
+			extras = append(extras, k)
+		}
+	}
+	sort.Strings(extras)
+	for _, k := range extras {
+		out = append(out, headerPair{Key: k, Value: headers[k]})
+	}
+	return out
+}
+
+// WhoisBrowserURL returns the full WHOIS browser lookup label and URL for a domain.
+// For .nz domains, it uses https://dnc.org.nz/whois/whois-lookup/?domain_name=DOMAINNAME.nz
+func WhoisBrowserURL(domain string, apexDomain string) (label string, whoisURL string) {
+	lookupDomain := analyzer.CleanDomainTarget(apexDomain)
+	if lookupDomain == "" {
+		lookupDomain = analyzer.CleanDomainTarget(domain)
+	}
+	if lookupDomain == "" {
+		return "", ""
+	}
+	if strings.HasSuffix(strings.ToLower(lookupDomain), ".nz") {
+		return "Open Full .nz WHOIS (DNC) ↗", "https://dnc.org.nz/whois/whois-lookup/?domain_name=" + url.QueryEscape(lookupDomain)
+	}
+	return "Open Full WHOIS in Browser ↗", "https://lookup.icann.org/en/lookup?name=" + url.QueryEscape(lookupDomain)
+}
+
+type owaspChallengeLink struct {
+	Label string
+	URL   string
+}
+
+func buildOWASPChallengeLinks(target string, wafInfo analyzer.WAFInfo) []owaspChallengeLink {
+	baseURL := strings.TrimSpace(wafInfo.BaselineURL)
+	if baseURL == "" {
+		clean := analyzer.NormalizeTarget(target)
+		if clean == "" {
+			return nil
+		}
+		baseURL = "https://" + clean
+	}
+
+	appendQuery := func(base, param string) string {
+		if strings.Contains(base, "?") {
+			return base + "&" + param
+		}
+		return base + "?" + param
+	}
+
+	probeURL := strings.TrimSpace(wafInfo.ProbeURL)
+	if probeURL == "" {
+		probeURL = appendQuery(baseURL, "probe_test=%3Cscript%3Ealert(1)%3C/script%3E")
+	}
+
+	return []owaspChallengeLink{
+		{
+			Label: "Baseline URL ↗",
+			URL:   baseURL,
+		},
+		{
+			Label: "OWASP XSS Challenge ↗",
+			URL:   probeURL,
+		},
+		{
+			Label: "OWASP SQLi Challenge ↗",
+			URL:   appendQuery(baseURL, "id=1%27%20OR%20%271%27%3D%271"),
+		},
+		{
+			Label: "OWASP Path Traversal Challenge ↗",
+			URL:   appendQuery(baseURL, "file=..%2F..%2Fetc%2Fpasswd"),
+		},
+	}
+}
+
 // ScanRunnerFunc abstracts domain and IP scanning so unit tests can inject fast mocks if desired.
 type ScanRunnerFunc struct {
 	AnalyzeDomain func(domain string, checkVulns bool) *analyzer.DomainInfo
 	AnalyzeIP     func(ip string, checkVulns bool) *analyzer.IPInfo
+}
+
+type cachedFavicon struct {
+	attempted bool
+	img       ui.ImageSource
+	svg       *ui.SVG
 }
 
 type DesktopApp struct {
@@ -39,6 +154,9 @@ type DesktopApp struct {
 	childScans      []storage.ScanSummary
 	scannedTargets  map[string]int64
 	rawJSONReadOnly string
+	jsonSpansDark   []ui.Span
+	jsonSpansLight  []ui.Span
+	faviconCache    map[int64]cachedFavicon
 
 	mu sync.Mutex
 }
@@ -46,8 +164,9 @@ type DesktopApp struct {
 func NewDesktopApp(store *storage.Store) *DesktopApp {
 	app := &DesktopApp{
 		store:          store,
-		sidebarWidth:   320,
+		sidebarWidth:   330,
 		scannedTargets: make(map[string]int64),
+		faviconCache:   make(map[int64]cachedFavicon),
 		runner: ScanRunnerFunc{
 			AnalyzeDomain: analyzer.Analyze,
 			AnalyzeIP:     analyzer.AnalyzeIP,
@@ -95,6 +214,8 @@ func (app *DesktopApp) SelectScan(id int64) {
 		app.currentPivots = nil
 		app.childScans = nil
 		app.rawJSONReadOnly = ""
+		app.jsonSpansDark = nil
+		app.jsonSpansLight = nil
 		return
 	}
 	rec, err := app.store.GetScan(id)
@@ -103,7 +224,10 @@ func (app *DesktopApp) SelectScan(id int64) {
 		return
 	}
 	app.currentScan = rec
-	app.rawJSONReadOnly = rec.RawJSON
+	app.rawJSONReadOnly = formatJSONPretty(rec.RawJSON)
+	app.jsonSpansDark = highlightJSON(app.rawJSONReadOnly, true)
+	app.jsonSpansLight = highlightJSON(app.rawJSONReadOnly, false)
+
 	if rec.TargetType == analyzer.TargetTypeIP {
 		app.currentPivots = analyzer.ExtractIPPivots(rec.IPInfo)
 	} else {
@@ -111,6 +235,37 @@ func (app *DesktopApp) SelectScan(id int64) {
 	}
 	if children, err := app.store.GetChildScans(id); err == nil {
 		app.childScans = children
+	}
+}
+
+// renderFavicon renders the decoded website favicon if present for a scan.
+func (app *DesktopApp) renderFavicon(c *ui.Context, scanID int64, raw []byte, size float32) {
+	if len(raw) == 0 {
+		return
+	}
+	entry, ok := app.faviconCache[scanID]
+	if !ok {
+		entry.attempted = true
+		trimmed := bytes.TrimSpace(raw)
+		if bytes.HasPrefix(trimmed, []byte("<svg")) || (bytes.HasPrefix(trimmed, []byte("<?xml")) && bytes.Contains(trimmed, []byte("<svg"))) {
+			if svg, err := ui.ParseSVG(trimmed); err == nil {
+				entry.svg = svg
+			}
+		} else {
+			normalized := analyzer.NormalizeFaviconBytes(raw)
+			if len(normalized) > 0 {
+				if img, err := ui.DecodeImage(normalized); err == nil {
+					entry.img = img
+				}
+			}
+		}
+		app.faviconCache[scanID] = entry
+	}
+
+	if entry.img != nil {
+		ui.Image(c, entry.img).Size(size, size).Radius(3)
+	} else if entry.svg != nil {
+		ui.Icon(c, entry.svg).Size(size, size)
 	}
 }
 
@@ -256,6 +411,8 @@ func (app *DesktopApp) renderSidebar(c *ui.Context, t *ui.Theme) {
 					card.Children(func() {
 						ui.Column(c).FillWidth().Gap(4).Children(func() {
 							ui.Row(c).FillWidth().Gap(6).AlignItems(ui.Center).Children(func() {
+								app.renderFavicon(c, scanItem.ID, scanItem.Favicon, 16)
+
 								typeBadge := "DOMAIN"
 								if scanItem.TargetType == analyzer.TargetTypeIP {
 									typeBadge = "IP"
@@ -315,6 +472,8 @@ func (app *DesktopApp) renderDetailPane(c *ui.Context, t *ui.Theme) {
 				}
 			}
 
+			app.renderFavicon(c, scan.ID, scan.Favicon, 20)
+
 			badgeLabel := "DOMAIN SCAN"
 			if scan.TargetType == analyzer.TargetTypeIP {
 				badgeLabel = "IP SCAN"
@@ -333,12 +492,13 @@ func (app *DesktopApp) renderDetailPane(c *ui.Context, t *ui.Theme) {
 			}
 
 			if ui.Button(c, "Copy JSON").Clicked() {
-				c.WriteClipboard(scan.RawJSON)
+				c.WriteClipboard(app.rawJSONReadOnly)
 				c.Toast("Copied scan JSON to clipboard")
 			}
 
 			if ui.Button(c, "Delete").Clicked() {
 				idToDelete := scan.ID
+				delete(app.faviconCache, idToDelete)
 				_ = app.store.DeleteScan(idToDelete)
 				app.RefreshHistory()
 				if len(app.scans) > 0 {
@@ -437,14 +597,14 @@ func (app *DesktopApp) renderKeyValue(c *ui.Context, t *ui.Theme, key string, va
 	if val == "" {
 		val = "N/A"
 	}
-	ui.Row(c).FillWidth().Gap(8).AlignItems(ui.Center).Wrap().Children(func() {
+	ui.Row(c).Key("kv:" + key).FillWidth().Gap(8).AlignItems(ui.Center).Wrap().Children(func() {
 		ui.Text(c, key+":").FontSize(12).TextColor(t.TextMuted).MinWidth(140)
 		ui.Text(c, val).FontSize(13).Selectable()
 	})
 }
 
 func (app *DesktopApp) renderDomainDetails(c *ui.Context, t *ui.Theme, scanID int64, info *analyzer.DomainInfo) {
-	// 1. Domain Registration & Overview
+	// 1. Domain Registration & Overview (with Full WHOIS Browser Link)
 	app.renderSectionCard(c, t, "Registration & Domain Overview", func() {
 		app.renderKeyValue(c, t, "Domain", info.Domain)
 		if info.ApexDomain != "" && !strings.EqualFold(info.ApexDomain, info.Domain) {
@@ -454,6 +614,14 @@ func (app *DesktopApp) renderDomainDetails(c *ui.Context, t *ui.Theme, scanID in
 		}
 		app.renderKeyValue(c, t, "Registrar", info.Registrar)
 		app.renderKeyValue(c, t, "Expiration Date", info.ExpiryDate)
+
+		whoisLabel, whoisURL := WhoisBrowserURL(info.Domain, info.ApexDomain)
+		if whoisURL != "" {
+			ui.Row(c).FillWidth().Gap(8).AlignItems(ui.Center).Wrap().Children(func() {
+				ui.Text(c, "External WHOIS:").FontSize(12).TextColor(t.TextMuted).MinWidth(140)
+				ui.Link(c, whoisLabel, whoisURL)
+			})
+		}
 	})
 
 	// 2. DNS & IP Infrastructure (with IP & NS drill-downs)
@@ -485,11 +653,22 @@ func (app *DesktopApp) renderDomainDetails(c *ui.Context, t *ui.Theme, scanID in
 		}
 	})
 
-	// 3. WAF & Edge Protection (with CNAME chain drill-downs)
+	// 3. WAF & Edge Protection (with CNAME chain drill-downs & OWASP Browser Challenges)
 	app.renderSectionCard(c, t, "WAF & Edge Protection", func() {
 		app.renderKeyValue(c, t, "WAF Summary", info.WAF.Summary)
 		if info.WAF.BaselineStatus > 0 || info.WAF.ProbeStatus > 0 {
 			app.renderKeyValue(c, t, "HTTP Probe Status", fmt.Sprintf("Baseline: HTTP %d → XSS Probe: HTTP %d", info.WAF.BaselineStatus, info.WAF.ProbeStatus))
+		}
+
+		// OWASP Passive/Challenge Links in Default Browser
+		challenges := buildOWASPChallengeLinks(info.Domain, info.WAF)
+		if len(challenges) > 0 {
+			ui.Row(c).FillWidth().Gap(10).AlignItems(ui.Center).Wrap().Children(func() {
+				ui.Text(c, "OWASP Browser Challenges:").FontSize(12).TextColor(t.TextMuted).MinWidth(140)
+				for _, ch := range challenges {
+					ui.Link(c, ch.Label, ch.URL)
+				}
+			})
 		}
 
 		if len(info.WAF.CNAMEs) > 0 {
@@ -500,7 +679,7 @@ func (app *DesktopApp) renderDomainDetails(c *ui.Context, t *ui.Theme, scanID in
 		}
 
 		for _, prov := range info.WAF.Providers {
-			ui.Box(c).FillWidth().Padding(8).Radius(6).Border(1, t.Border).Children(func() {
+			ui.Box(c).Key("wafprov:"+prov.Provider).FillWidth().Padding(8).Radius(6).Border(1, t.Border).Children(func() {
 				ui.Column(c).FillWidth().Gap(4).Children(func() {
 					ui.Row(c).Gap(6).AlignItems(ui.Center).Children(func() {
 						ui.Text(c, prov.Provider).Bold()
@@ -540,7 +719,7 @@ func (app *DesktopApp) renderDomainDetails(c *ui.Context, t *ui.Theme, scanID in
 		}
 	})
 
-	// 5. Web Tech Stack & Security Headers
+	// 5. Web Tech Stack & Security Headers (Deterministically ordered!)
 	app.renderSectionCard(c, t, "Web Technologies & Security Headers", func() {
 		if len(info.Web.TechDetails) > 0 {
 			var techFormatted []string
@@ -556,10 +735,11 @@ func (app *DesktopApp) renderDomainDetails(c *ui.Context, t *ui.Theme, scanID in
 			app.renderKeyValue(c, t, "Detected Tech Stack", "None fingerprinted")
 		}
 
-		if len(info.Web.SecurityHeaders) > 0 {
+		orderedHeaders := sortedSecurityHeaders(info.Web.SecurityHeaders)
+		if len(orderedHeaders) > 0 {
 			ui.Text(c, "HTTP Security Headers:").FontSize(12).TextColor(t.TextMuted)
-			for k, v := range info.Web.SecurityHeaders {
-				app.renderKeyValue(c, t, k, v)
+			for _, kv := range orderedHeaders {
+				app.renderKeyValue(c, t, kv.Key, kv.Value)
 			}
 		}
 	})
@@ -603,6 +783,13 @@ func (app *DesktopApp) renderIPDetails(c *ui.Context, t *ui.Theme, scanID int64,
 		app.renderKeyValue(c, t, "ASN", info.ASN)
 		app.renderKeyValue(c, t, "CIDR / NetRange", info.CIDR)
 		app.renderKeyValue(c, t, "Country", info.Country)
+
+		if info.IP != "" {
+			ui.Row(c).FillWidth().Gap(8).AlignItems(ui.Center).Wrap().Children(func() {
+				ui.Text(c, "External WHOIS:").FontSize(12).TextColor(t.TextMuted).MinWidth(140)
+				ui.Link(c, "Open Full IP WHOIS in Browser ↗", "https://who.is/whois-ip/ip-address/"+url.PathEscape(info.IP))
+			})
+		}
 	})
 
 	// 2. Reverse DNS (PTR) Hostnames
@@ -636,15 +823,25 @@ func (app *DesktopApp) renderIPDetails(c *ui.Context, t *ui.Theme, scanID int64,
 	// 4. Direct HTTP / WAF / Tech Stack on IP
 	app.renderSectionCard(c, t, "Direct HTTP, WAF & Tech Fingerprinting", func() {
 		app.renderKeyValue(c, t, "WAF Summary", info.WAF.Summary)
+
+		challenges := buildOWASPChallengeLinks(info.IP, info.WAF)
+		if len(challenges) > 0 {
+			ui.Row(c).FillWidth().Gap(10).AlignItems(ui.Center).Wrap().Children(func() {
+				ui.Text(c, "OWASP Browser Challenges:").FontSize(12).TextColor(t.TextMuted).MinWidth(140)
+				for _, ch := range challenges {
+					ui.Link(c, ch.Label, ch.URL)
+				}
+			})
+		}
+
 		if len(info.Web.TechStack) > 0 {
 			app.renderKeyValue(c, t, "Detected Tech Stack", strings.Join(info.Web.TechStack, ", "))
 		} else {
 			app.renderKeyValue(c, t, "Detected Tech Stack", "None fingerprinted")
 		}
-		if len(info.Web.SecurityHeaders) > 0 {
-			for k, v := range info.Web.SecurityHeaders {
-				app.renderKeyValue(c, t, k, v)
-			}
+		orderedHeaders := sortedSecurityHeaders(info.Web.SecurityHeaders)
+		for _, kv := range orderedHeaders {
+			app.renderKeyValue(c, t, kv.Key, kv.Value)
 		}
 	})
 
@@ -706,6 +903,7 @@ func (app *DesktopApp) renderChildScansTab(c *ui.Context, t *ui.Theme) {
 		for _, child := range app.childScans {
 			ch := child
 			ui.Row(c).Key(ch.ID).FillWidth().Gap(8).AlignItems(ui.Center).Children(func() {
+				app.renderFavicon(c, ch.ID, ch.Favicon, 16)
 				ui.Badge(c, string(ch.TargetType))
 				ui.Text(c, ch.Target).Bold()
 				if ch.PivotReason != "" {
@@ -723,7 +921,149 @@ func (app *DesktopApp) renderChildScansTab(c *ui.Context, t *ui.Theme) {
 }
 
 func (app *DesktopApp) renderRawJSONTab(c *ui.Context, t *ui.Theme) {
-	app.renderSectionCard(c, t, "Persisted JSON Payload", func() {
-		ui.TextArea(c, &app.rawJSONReadOnly).ReadOnly(true).Lines(18, 40).FillWidth()
+	ui.Box(c).FillWidth().Padding(12).Radius(8).Background(t.Surface).Border(1, t.Border).Children(func() {
+		ui.Column(c).FillWidth().Gap(8).Children(func() {
+			ui.Row(c).FillWidth().AlignItems(ui.Center).Children(func() {
+				ui.Text(c, "Formatted & Syntax-Highlighted JSON").FontSize(14).Bold()
+				ui.Spacer(c)
+				if ui.PrimaryButton(c, "Copy JSON to Clipboard").Clicked() {
+					c.WriteClipboard(app.rawJSONReadOnly)
+					c.Toast("Copied formatted JSON to clipboard")
+				}
+			})
+			ui.Divider(c)
+
+			spans := app.jsonSpansLight
+			if t.Dark {
+				spans = app.jsonSpansDark
+			}
+			ui.Box(c).FillWidth().Padding(12).Radius(6).Background(t.Background).Border(1, t.Border).Children(func() {
+				ui.RichText(c, spans...).Font("monospace").FontSize(12).Selectable().FillWidth()
+			})
+		})
 	})
+}
+
+func formatJSONPretty(raw string) string {
+	var buf bytes.Buffer
+	if err := json.Indent(&buf, []byte(raw), "", "  "); err == nil {
+		return buf.String()
+	}
+	return raw
+}
+
+// highlightJSON tokenizes pretty-printed JSON into syntax-highlighted ui.Span runs.
+func highlightJSON(src string, dark bool) []ui.Span {
+	var (
+		colKey   = ui.RGB(5, 80, 174)
+		colStr   = ui.RGB(17, 99, 41)
+		colNum   = ui.RGB(149, 56, 0)
+		colBool  = ui.RGB(130, 80, 223)
+		colPunct = ui.RGB(100, 110, 120)
+	)
+	if dark {
+		colKey = ui.RGB(121, 192, 255)
+		colStr = ui.RGB(126, 231, 135)
+		colNum = ui.RGB(255, 166, 87)
+		colBool = ui.RGB(210, 168, 255)
+		colPunct = ui.RGB(139, 148, 158)
+	}
+
+	var spans []ui.Span
+	n := len(src)
+	i := 0
+
+	for i < n {
+		ch := src[i]
+
+		// String token (either object key or string value)
+		if ch == '"' {
+			start := i
+			i++
+			for i < n {
+				if src[i] == '\\' {
+					i += 2
+					continue
+				}
+				if src[i] == '"' {
+					i++
+					break
+				}
+				i++
+			}
+			token := src[start:i]
+
+			// Look ahead past spaces to see if followed by ':'
+			j := i
+			for j < n && (src[j] == ' ' || src[j] == '\t') {
+				j++
+			}
+			isKey := j < n && src[j] == ':'
+
+			if isKey {
+				spans = append(spans, ui.Span{
+					Text:   token,
+					Font:   "monospace",
+					Color:  colKey,
+					Weight: 600,
+				})
+			} else {
+				spans = append(spans, ui.Span{
+					Text:  token,
+					Font:  "monospace",
+					Color: colStr,
+				})
+			}
+			continue
+		}
+
+		// Number token
+		if (ch >= '0' && ch <= '9') || ch == '-' {
+			start := i
+			i++
+			for i < n && ((src[i] >= '0' && src[i] <= '9') || src[i] == '.' || src[i] == 'e' || src[i] == 'E' || src[i] == '+' || src[i] == '-') {
+				i++
+			}
+			spans = append(spans, ui.Span{
+				Text:  src[start:i],
+				Font:  "monospace",
+				Color: colNum,
+			})
+			continue
+		}
+
+		// Boolean or null literal
+		if strings.HasPrefix(src[i:], "true") || strings.HasPrefix(src[i:], "false") || strings.HasPrefix(src[i:], "null") {
+			litLen := 4
+			if strings.HasPrefix(src[i:], "false") {
+				litLen = 5
+			}
+			spans = append(spans, ui.Span{
+				Text:   src[i : i+litLen],
+				Font:   "monospace",
+				Color:  colBool,
+				Weight: 600,
+			})
+			i += litLen
+			continue
+		}
+
+		// Punctuation & whitespace
+		start := i
+		for i < n {
+			c := src[i]
+			if c == '"' || (c >= '0' && c <= '9') || c == '-' ||
+				strings.HasPrefix(src[i:], "true") || strings.HasPrefix(src[i:], "false") || strings.HasPrefix(src[i:], "null") {
+				break
+			}
+			i++
+		}
+		spans = append(spans, ui.Span{
+			Text:  src[start:i],
+			Font:  "monospace",
+			Color: colPunct,
+		})
+	}
+
+	return spans
 }

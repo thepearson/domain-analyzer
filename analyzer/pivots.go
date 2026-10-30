@@ -144,4 +144,3 @@ func ExtractIPPivots(info *IPInfo) []PivotTarget {
 
 	return pivots
 }
-

@@ -21,6 +21,7 @@ type ScanSummary struct {
 	PivotReason  string              `json:"pivot_reason,omitempty"`
 	CheckVulns   bool                `json:"check_vulns"`
 	Summary      string              `json:"summary"`
+	Favicon      []byte              `json:"favicon,omitempty"`
 	CreatedAt    time.Time           `json:"created_at"`
 }
 
@@ -85,6 +86,7 @@ func (s *Store) migrate() error {
 		pivot_reason TEXT NOT NULL DEFAULT '',
 		check_vulns INTEGER NOT NULL DEFAULT 0,
 		summary TEXT NOT NULL DEFAULT '',
+		favicon BLOB,
 		payload_json TEXT NOT NULL,
 		created_at TEXT NOT NULL
 	);
@@ -92,8 +94,12 @@ func (s *Store) migrate() error {
 	CREATE INDEX IF NOT EXISTS idx_scans_parent ON scans(parent_scan_id);
 	CREATE INDEX IF NOT EXISTS idx_scans_created_at ON scans(created_at DESC);
 	`
-	_, err := s.db.Exec(schema)
-	return err
+	if _, err := s.db.Exec(schema); err != nil {
+		return err
+	}
+	// Upgrade existing databases created before the favicon column was added
+	_, _ = s.db.Exec(`ALTER TABLE scans ADD COLUMN favicon BLOB`)
+	return nil
 }
 
 func buildDomainSummary(info *analyzer.DomainInfo) string {
@@ -140,10 +146,15 @@ func (s *Store) SaveDomainScan(info *analyzer.DomainInfo, parentID int64, reason
 	if info == nil {
 		return 0, fmt.Errorf("domain info is nil")
 	}
-	payload, err := json.Marshal(info)
+	favicon := info.Web.Favicon
+	// Temporarily omit binary favicon from JSON payload so Raw JSON view stays clean and human-readable
+	info.Web.Favicon = nil
+	payload, err := json.MarshalIndent(info, "", "  ")
+	info.Web.Favicon = favicon
 	if err != nil {
 		return 0, fmt.Errorf("marshaling domain info: %w", err)
 	}
+
 	target := strings.ToLower(strings.TrimSpace(info.Domain))
 	summary := buildDomainSummary(info)
 	createdAt := time.Now().UTC().Format(time.RFC3339Nano)
@@ -153,9 +164,9 @@ func (s *Store) SaveDomainScan(info *analyzer.DomainInfo, parentID int64, reason
 	}
 
 	res, err := s.db.Exec(
-		`INSERT INTO scans (target, target_type, parent_scan_id, pivot_reason, check_vulns, summary, payload_json, created_at)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-		target, string(analyzer.TargetTypeDomain), parentID, reason, vulnsInt, summary, string(payload), createdAt,
+		`INSERT INTO scans (target, target_type, parent_scan_id, pivot_reason, check_vulns, summary, favicon, payload_json, created_at)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		target, string(analyzer.TargetTypeDomain), parentID, reason, vulnsInt, summary, favicon, string(payload), createdAt,
 	)
 	if err != nil {
 		return 0, fmt.Errorf("inserting domain scan: %w", err)
@@ -168,10 +179,14 @@ func (s *Store) SaveIPScan(info *analyzer.IPInfo, parentID int64, reason string,
 	if info == nil {
 		return 0, fmt.Errorf("ip info is nil")
 	}
-	payload, err := json.Marshal(info)
+	favicon := info.Web.Favicon
+	info.Web.Favicon = nil
+	payload, err := json.MarshalIndent(info, "", "  ")
+	info.Web.Favicon = favicon
 	if err != nil {
 		return 0, fmt.Errorf("marshaling ip info: %w", err)
 	}
+
 	target := strings.TrimSpace(info.IP)
 	summary := buildIPSummary(info)
 	createdAt := time.Now().UTC().Format(time.RFC3339Nano)
@@ -181,9 +196,9 @@ func (s *Store) SaveIPScan(info *analyzer.IPInfo, parentID int64, reason string,
 	}
 
 	res, err := s.db.Exec(
-		`INSERT INTO scans (target, target_type, parent_scan_id, pivot_reason, check_vulns, summary, payload_json, created_at)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-		target, string(analyzer.TargetTypeIP), parentID, reason, vulnsInt, summary, string(payload), createdAt,
+		`INSERT INTO scans (target, target_type, parent_scan_id, pivot_reason, check_vulns, summary, favicon, payload_json, created_at)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		target, string(analyzer.TargetTypeIP), parentID, reason, vulnsInt, summary, favicon, string(payload), createdAt,
 	)
 	if err != nil {
 		return 0, fmt.Errorf("inserting ip scan: %w", err)
@@ -198,13 +213,13 @@ func (s *Store) ListScans(searchFilter string) ([]ScanSummary, error) {
 	var err error
 	if filter == "" {
 		rows, err = s.db.Query(
-			`SELECT id, target, target_type, parent_scan_id, pivot_reason, check_vulns, summary, created_at
+			`SELECT id, target, target_type, parent_scan_id, pivot_reason, check_vulns, summary, favicon, created_at
 			 FROM scans ORDER BY id DESC`,
 		)
 	} else {
 		like := "%" + strings.ToLower(filter) + "%"
 		rows, err = s.db.Query(
-			`SELECT id, target, target_type, parent_scan_id, pivot_reason, check_vulns, summary, created_at
+			`SELECT id, target, target_type, parent_scan_id, pivot_reason, check_vulns, summary, favicon, created_at
 			 FROM scans
 			 WHERE LOWER(target) LIKE ? OR LOWER(summary) LIKE ? OR LOWER(pivot_reason) LIKE ?
 			 ORDER BY id DESC`,
@@ -225,7 +240,7 @@ func (s *Store) GetChildScans(parentID int64) ([]ScanSummary, error) {
 		return nil, nil
 	}
 	rows, err := s.db.Query(
-		`SELECT id, target, target_type, parent_scan_id, pivot_reason, check_vulns, summary, created_at
+		`SELECT id, target, target_type, parent_scan_id, pivot_reason, check_vulns, summary, favicon, created_at
 		 FROM scans WHERE parent_scan_id = ? ORDER BY id DESC`,
 		parentID,
 	)
@@ -252,6 +267,7 @@ func scanSummariesFromRows(rows *sql.Rows) ([]ScanSummary, error) {
 			&item.PivotReason,
 			&vulnsInt,
 			&item.Summary,
+			&item.Favicon,
 			&createdStr,
 		); err != nil {
 			return nil, err
@@ -274,7 +290,7 @@ func (s *Store) GetScan(id int64) (*ScanRecord, error) {
 	var createdStr string
 
 	err := s.db.QueryRow(
-		`SELECT id, target, target_type, parent_scan_id, pivot_reason, check_vulns, summary, payload_json, created_at
+		`SELECT id, target, target_type, parent_scan_id, pivot_reason, check_vulns, summary, favicon, payload_json, created_at
 		 FROM scans WHERE id = ?`,
 		id,
 	).Scan(
@@ -285,6 +301,7 @@ func (s *Store) GetScan(id int64) (*ScanRecord, error) {
 		&rec.PivotReason,
 		&vulnsInt,
 		&rec.Summary,
+		&rec.Favicon,
 		&rec.RawJSON,
 		&createdStr,
 	)
@@ -298,17 +315,29 @@ func (s *Store) GetScan(id int64) (*ScanRecord, error) {
 		rec.CreatedAt = t
 	}
 
+	// Ensure RawJSON is pretty-formatted even if loaded from an older compact record
+	var prettyBuf strings.Builder
+	var rawAny any
+	if err := json.Unmarshal([]byte(rec.RawJSON), &rawAny); err == nil {
+		if indented, err := json.MarshalIndent(rawAny, "", "  "); err == nil {
+			prettyBuf.Write(indented)
+			rec.RawJSON = prettyBuf.String()
+		}
+	}
+
 	if rec.TargetType == analyzer.TargetTypeIP {
 		var ipInfo analyzer.IPInfo
 		if err := json.Unmarshal([]byte(rec.RawJSON), &ipInfo); err != nil {
 			return nil, fmt.Errorf("unmarshaling ip scan %d: %w", id, err)
 		}
+		ipInfo.Web.Favicon = rec.Favicon
 		rec.IPInfo = &ipInfo
 	} else {
 		var domInfo analyzer.DomainInfo
 		if err := json.Unmarshal([]byte(rec.RawJSON), &domInfo); err != nil {
 			return nil, fmt.Errorf("unmarshaling domain scan %d: %w", id, err)
 		}
+		domInfo.Web.Favicon = rec.Favicon
 		rec.DomainInfo = &domInfo
 	}
 
@@ -340,4 +369,3 @@ func (s *Store) DeleteScan(id int64) error {
 	_, err := s.db.Exec(`DELETE FROM scans WHERE id = ?`, id)
 	return err
 }
-

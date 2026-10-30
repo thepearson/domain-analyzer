@@ -46,6 +46,8 @@ type WAFInfo struct {
 	Detected       bool                `json:"detected"`
 	Summary        string              `json:"summary"`
 	CNAMEs         []string            `json:"cnames,omitempty"`
+	BaselineURL    string              `json:"baseline_url,omitempty"`
+	ProbeURL       string              `json:"probe_url,omitempty"`
 	BaselineStatus int                 `json:"baseline_status,omitempty"`
 	ProbeStatus    int                 `json:"probe_status,omitempty"`
 	Providers      []WAFProviderResult `json:"providers,omitempty"`
@@ -109,6 +111,8 @@ func getWAFInfo(domain string, apexDomain string, info *DomainInfo) error {
 	probeResp, _ := performHTTPProbe(testURL)
 
 	wafInfo := EvaluateWAF(cnames, baseResp, probeResp)
+	wafInfo.BaselineURL = probeTargetURL
+	wafInfo.ProbeURL = testURL
 
 	info.Lock()
 	info.WAF = wafInfo

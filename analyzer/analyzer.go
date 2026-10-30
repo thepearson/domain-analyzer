@@ -44,6 +44,7 @@ type WebInfo struct {
 	TechStack       []string          `json:"tech_stack,omitempty"`
 	TechDetails     []TechDetail      `json:"tech_details,omitempty"`
 	SecurityHeaders map[string]string `json:"security_headers,omitempty"`
+	Favicon         []byte            `json:"favicon,omitempty"`
 }
 
 type TechDetail struct {
