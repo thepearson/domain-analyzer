@@ -3,8 +3,10 @@
 `domain-analyzer` is a Go-based command-line utility designed for rapid domain reconnaissance. It aggregates information from multiple sources to provide a comprehensive view of a domain's status, infrastructure, and technology stack.
 
 ## Main Technologies
-- **Language:** Go (v1.25.0)
+- **Language:** Go (v1.27+)
 - **CLI Parsing:** `github.com/jessevdk/go-flags`
+- **Native Desktop UI:** `github.com/egoist/mygo` & `github.com/egoist/mygo/ui` (Pure Go, GPU-accelerated native widgets, `CGO_ENABLED=0`)
+- **Persistent Storage:** `modernc.org/sqlite` (Pure Go embedded SQLite database for scan history and pivot lineage)
 - **WHOIS Fetching:** `github.com/likexian/whois`
 - **WHOIS Parsing:** `github.com/likexian/whois-parser`
 - **Tech Stack Discovery:** `github.com/projectdiscovery/wappalyzergo`
@@ -14,15 +16,19 @@
 The project is structured into modular packages to ensure scalability and testability.
 
 ### Packages
-- **`main`**: Handles CLI argument parsing using `go-flags`. It supports reading domains from positional arguments and stdin, orchestration of analysis across multiple domains, and redirection of output to files.
-- **`analyzer`**: Contains the core logic for domain analysis.
-  - `Analyze(domain string, checkVulns bool)`: Orchestrates sub-modules concurrently using `sync.WaitGroup`.
+- **`cmd/cli` (and root `main.go`)**: Handles CLI argument parsing using `go-flags`. It supports reading domains from positional arguments and stdin, orchestration of analysis across multiple domains, and redirection of output to files.
+- **`cmd/gui`**: Native desktop application built with MyGo (`github.com/egoist/mygo/ui`). Provides a split-pane interface with persistent scan history, search filtering, detailed reconnaissance cards, and one-click drill-down (pivoting) into discovered domains and IP addresses.
+- **`analyzer`**: Contains the core logic for domain and IP analysis.
+  - `Analyze(domain string, checkVulns bool)`: Orchestrates domain sub-modules concurrently using `sync.WaitGroup`.
+  - `AnalyzeIP(ip string, checkVulns bool)`: Orchestrates IP reconnaissance (Reverse DNS PTR, IP WHOIS/ASN/CIDR, direct `:443` TLS SAN inspection, direct HTTP/WAF/tech fingerprinting).
+  - `pivots.go`: Extracts and normalizes actionable domain and IP pivot targets from completed scans.
   - `whois.go`: Registrar and expiration date retrieval.
   - `dns.go`: IP resolution, IP ownership (WHOIS), and mail provider detection.
   - `web.go`: WWW support check and tech stack fingerprinting with version detection.
   - `waf.go`: WAF detection, implementation details (CNAME chain, edge proxy/CDN, bot management), and active enforcement probing.
   - `tls.go`: TLS certificate inspection.
   - `vulnerabilities.go`: CVE lookup via NVD API based on detected tech versions.
+- **`storage`**: Persistent SQLite database (`sqlite.go`) storing serialized `DomainInfo` and `IPInfo` records, parent-child drill-down lineage (`parent_scan_id`, `pivot_reason`), and target lookup maps.
 - **`output`**: Provides different formatters for displaying results. All formatters implement a shared `Formatter` interface that writes to an `io.Writer`.
   - `tabular.go`: Formatted table output using `tabwriter`.
   - `json.go`: Standard JSON serialization.

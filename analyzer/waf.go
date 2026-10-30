@@ -95,7 +95,7 @@ func getWAFInfo(domain string, apexDomain string, info *DomainInfo) error {
 	// only if www resolves to the same IP or if no CNAME was found at apex.
 	if len(cnames) == 0 && strings.EqualFold(host, apexDomain) {
 		wwwCNAMEs := lookupCNAMEChain("www." + apexDomain)
-		if len(wwwCNAMEs) > 0 && strings.Contains( strings.ToLower(probeTargetURL), "www."+strings.ToLower(apexDomain)) {
+		if len(wwwCNAMEs) > 0 && strings.Contains(strings.ToLower(probeTargetURL), "www."+strings.ToLower(apexDomain)) {
 			cnames = mergeUniqueStrings(cnames, wwwCNAMEs)
 		}
 	}

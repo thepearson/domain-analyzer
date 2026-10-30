@@ -82,10 +82,34 @@ HTTP Probe Status  Baseline: 200, WAF Trigger: 200
 ```bash
 git clone https://github.com/yourusername/domain-analyzer.git
 cd domain-analyzer
-go build -o domain-analyzer
+
+# Build the CLI tool
+go build -o domain-analyzer ./cmd/cli
+
+# Build the Native Desktop GUI (MyGo + SQLite)
+go build -o domain-analyzer-gui ./cmd/gui
 ```
 
-## Usage
+## Native Desktop UI (`domain-analyzer-gui`)
+
+The native GPU-accelerated desktop app (built with `github.com/egoist/mygo/ui` and `modernc.org/sqlite`) retains all scans persistently across sessions and lets you interactively drill down into discovered entities:
+
+- **Persistent Scan History**: Automatically saves all domain and IP scans to a local SQLite database (`~/.config/domain-analyzer/scans.db` on Linux) with instant search/filtering.
+- **One-Click Drill-Down (Pivoting)**: Click **`Scan Domain ↗`** or **`Scan IP ↗`** on any discovered entity—including `A` and `WWW` IP addresses, Apex domains, CNAME hops, TLS Certificate Subject Alternative Names (SANs), Reverse DNS (PTR) hostnames, Nameservers, and SPF `include:` domains.
+- **Lineage Tracking**: Tracks parent-to-child scan relationships so you can jump back via **`← Parent Scan`** or inspect all child scans under the **Child Scans** tab.
+
+```bash
+# Launch the desktop UI
+./domain-analyzer-gui
+
+# Or launch and immediately scan a target
+./domain-analyzer-gui example.com
+
+# Optional custom SQLite database path
+./domain-analyzer-gui -db ./project-scans.db
+```
+
+## CLI Usage
 
 Provide a domain name as a positional argument, or pipe multiple domains via stdin.
 
