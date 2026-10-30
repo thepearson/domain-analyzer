@@ -78,4 +78,3 @@ HOST: workstation                 Loss%   Snt   Last   Avg  Best  Wrst StDev
 		t.Errorf("unexpected mtr hops: %+v", mtrHops)
 	}
 }
-

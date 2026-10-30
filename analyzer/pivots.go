@@ -101,6 +101,16 @@ func ExtractDomainPivots(info *DomainInfo) []PivotTarget {
 		addDomain(ns, "Nameserver")
 	}
 
+	// 7. Discovered Subdomains & Resolved IPs
+	if info.Subdomains != nil {
+		for _, sub := range info.Subdomains.Subdomains {
+			addDomain(sub.Subdomain, "Subdomain")
+			for _, ip := range sub.IPAddresses {
+				addIP(ip, "Subdomain IP ("+sub.Subdomain+")")
+			}
+		}
+	}
+
 	return pivots
 }
 

@@ -125,6 +125,7 @@ func TestDesktopAppDrillDownAndFeatures(t *testing.T) {
 	portDoneCh := make(chan struct{}, 2)
 	pingDoneCh := make(chan struct{}, 2)
 	traceDoneCh := make(chan struct{}, 2)
+	subDoneCh := make(chan struct{}, 2)
 	app.runner = ScanRunnerFunc{
 		AnalyzeDomain: func(domain string, checkVulns bool) *analyzer.DomainInfo {
 			defer func() { doneCh <- struct{}{} }()
@@ -174,6 +175,28 @@ func TestDesktopAppDrillDownAndFeatures(t *testing.T) {
 				Hops: []analyzer.TracerouteHop{
 					{Hop: 1, IP: "203.0.113.1", Host: "gw.isp.example.net", RTT: "2.10 ms"},
 					{Hop: 2, IP: "93.184.216.34", Host: "origin.example.co.nz", RTT: "11.80 ms"},
+				},
+			}
+		},
+		EnumerateSubdomains: func(domain string) *analyzer.SubdomainEnumeration {
+			defer func() { subDoneCh <- struct{}{} }()
+			return &analyzer.SubdomainEnumeration{
+				ApexDomain:  "example.co.nz",
+				TotalFound:  2,
+				ActiveCount: 1,
+				SourcesUsed: []string{"crt.sh", "DNS"},
+				Subdomains: []analyzer.SubdomainEntry{
+					{
+						Subdomain:   "api.example.co.nz",
+						IPAddresses: []string{"93.184.216.40"},
+						Active:      true,
+						Sources:     []string{"crt.sh", "DNS"},
+					},
+					{
+						Subdomain: "legacy.example.co.nz",
+						Active:    false,
+						Sources:   []string{"crt.sh"},
+					},
 				},
 			}
 		},
@@ -312,6 +335,21 @@ func TestDesktopAppDrillDownAndFeatures(t *testing.T) {
 	tester.Frame()
 	if !tester.HasText("203.0.113.1") || !tester.HasText("(gw.isp.example.net)") {
 		t.Errorf("expected Traceroute hop IP and hostname to be rendered on scan page")
+	}
+
+	// Run Passive Subdomain Enumeration on the domain scan page
+	if err := tester.Click("Enumerate Subdomains"); err != nil {
+		t.Fatalf("clicking 'Enumerate Subdomains' failed: %v", err)
+	}
+	select {
+	case <-subDoneCh:
+	case <-time.After(3 * time.Second):
+		t.Fatalf("timed out waiting for background Subdomain Enumeration")
+	}
+	time.Sleep(50 * time.Millisecond)
+	tester.Frame()
+	if !tester.HasText("api.example.co.nz") || !tester.HasText("legacy.example.co.nz") {
+		t.Errorf("expected discovered subdomains to be rendered on scan page")
 	}
 
 	// Verify favicon persisted across sessions in scan list

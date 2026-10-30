@@ -152,6 +152,30 @@ func (f *TabularFormatter) Format(w io.Writer, info *analyzer.DomainInfo) error 
 		}
 	}
 
+	// --- SUBDOMAINS SECTION ---
+	if info.Subdomains != nil {
+		fmt.Fprintln(tw, "\n==================================================")
+		fmt.Fprintf(tw, "CATEGORY: SUBDOMAINS (%d found, %d active)\n", info.Subdomains.TotalFound, info.Subdomains.ActiveCount)
+		fmt.Fprintln(tw, "==================================================")
+		for _, sub := range info.Subdomains.Subdomains {
+			status := "Historical (CT)"
+			if sub.Active {
+				status = "Active"
+			}
+			details := status
+			if len(sub.IPAddresses) > 0 {
+				details += " | IP: " + strings.Join(sub.IPAddresses, ", ")
+			}
+			if sub.CNAME != "" {
+				details += " | CNAME: " + sub.CNAME
+			}
+			if len(sub.Sources) > 0 {
+				details += " [" + strings.Join(sub.Sources, "+") + "]"
+			}
+			fmt.Fprintf(tw, "%s\t%s\n", sub.Subdomain, details)
+		}
+	}
+
 	// --- VULNERABILITIES SECTION ---
 	if len(info.Vulnerabilities) > 0 {
 		fmt.Fprintln(tw, "\n==================================================")

@@ -15,6 +15,7 @@ import (
 type Options struct {
 	Format     string `short:"f" long:"format" description:"Output format (tabular, json, csv)" default:"tabular"`
 	CheckVulns bool   `short:"v" long:"check-vulnerabilities" description:"Check for CVE vulnerabilities (may be slow)"`
+	Subdomains bool   `short:"s" long:"subdomains" description:"Enumerate subdomains via Certificate Transparency (crt.sh) & DNS"`
 	Output     string `short:"o" long:"output" description:"Output results to a file"`
 	Args       struct {
 		Domain string `positional-arg-name:"domain" description:"Domain name to analyze"`
@@ -81,6 +82,9 @@ func main() {
 		fmt.Fprintf(os.Stderr, "[%d/%d] Analyzing domain: %s...\n", i+1, len(domains), domain)
 
 		info := analyzer.Analyze(domain, opts.CheckVulns)
+		if opts.Subdomains {
+			info.Subdomains = analyzer.EnumerateSubdomains(domain)
+		}
 
 		if err := formatter.Format(out, info); err != nil {
 			fmt.Fprintf(os.Stderr, "Error formatting output for %s: %v\n", domain, err)

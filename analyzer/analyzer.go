@@ -82,14 +82,15 @@ type DomainInfo struct {
 	Registrar  string `json:"registrar,omitempty"`
 	ExpiryDate string `json:"expiry_date,omitempty"`
 
-	DNS             DNSInfo           `json:"dns"`
-	Web             WebInfo           `json:"web"`
-	WAF             WAFInfo           `json:"waf"`
-	TLS             TLSInfo           `json:"tls"`
-	Email           EmailInfo         `json:"email"`
-	Ping            *PingResult       `json:"ping,omitempty"`
-	Traceroute      *TracerouteResult `json:"traceroute,omitempty"`
-	Vulnerabilities []Vulnerability   `json:"vulnerabilities,omitempty"`
+	DNS             DNSInfo               `json:"dns"`
+	Web             WebInfo               `json:"web"`
+	WAF             WAFInfo               `json:"waf"`
+	TLS             TLSInfo               `json:"tls"`
+	Email           EmailInfo             `json:"email"`
+	Subdomains      *SubdomainEnumeration `json:"subdomains,omitempty"`
+	Ping            *PingResult           `json:"ping,omitempty"`
+	Traceroute      *TracerouteResult     `json:"traceroute,omitempty"`
+	Vulnerabilities []Vulnerability       `json:"vulnerabilities,omitempty"`
 }
 
 func Analyze(domain string, checkVulns bool) *DomainInfo {

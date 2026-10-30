@@ -123,11 +123,12 @@ func buildOWASPChallengeLinks(target string, wafInfo analyzer.WAFInfo) []owaspCh
 
 // ScanRunnerFunc abstracts domain, IP, port, ping, and traceroute operations so unit tests can inject fast mocks if desired.
 type ScanRunnerFunc struct {
-	AnalyzeDomain func(domain string, checkVulns bool) *analyzer.DomainInfo
-	AnalyzeIP     func(ip string, checkVulns bool) *analyzer.IPInfo
-	ScanPorts     func(ip string) []analyzer.PortService
-	RunPing       func(target string) *analyzer.PingResult
-	RunTraceroute func(target string) *analyzer.TracerouteResult
+	AnalyzeDomain       func(domain string, checkVulns bool) *analyzer.DomainInfo
+	AnalyzeIP           func(ip string, checkVulns bool) *analyzer.IPInfo
+	ScanPorts           func(ip string) []analyzer.PortService
+	RunPing             func(target string) *analyzer.PingResult
+	RunTraceroute       func(target string) *analyzer.TracerouteResult
+	EnumerateSubdomains func(domain string) *analyzer.SubdomainEnumeration
 }
 
 type cachedFavicon struct {
@@ -177,11 +178,12 @@ func NewDesktopApp(store *storage.Store) *DesktopApp {
 		techFaviconCache: make(map[string]cachedFavicon),
 		techFetching:     make(map[string]bool),
 		runner: ScanRunnerFunc{
-			AnalyzeDomain: analyzer.Analyze,
-			AnalyzeIP:     analyzer.AnalyzeIP,
-			ScanPorts:     analyzer.ScanPorts,
-			RunPing:       analyzer.RunPing,
-			RunTraceroute: analyzer.RunTraceroute,
+			AnalyzeDomain:       analyzer.Analyze,
+			AnalyzeIP:           analyzer.AnalyzeIP,
+			ScanPorts:           analyzer.ScanPorts,
+			RunPing:             analyzer.RunPing,
+			RunTraceroute:       analyzer.RunTraceroute,
+			EnumerateSubdomains: analyzer.EnumerateSubdomains,
 		},
 	}
 	app.RefreshHistory()
@@ -633,6 +635,47 @@ func (app *DesktopApp) StartTraceroute(scanID int64) {
 	}()
 }
 
+// StartSubdomainEnum runs passive Certificate Transparency & DNS subdomain enumeration against the current domain scan.
+func (app *DesktopApp) StartSubdomainEnum(scanID int64) {
+	if app.currentScan == nil || app.currentScan.ID != scanID || app.currentScan.DomainInfo == nil || app.scanning {
+		return
+	}
+	rec := app.currentScan
+	domain := rec.DomainInfo.ApexDomain
+	if domain == "" {
+		domain = rec.DomainInfo.Domain
+	}
+	app.scanning = true
+	app.statusText = fmt.Sprintf("Enumerating subdomains for %s (CT logs & DNS)...", domain)
+
+	go func() {
+		enumFn := app.runner.EnumerateSubdomains
+		if enumFn == nil {
+			enumFn = analyzer.EnumerateSubdomains
+		}
+		subRes := enumFn(domain)
+
+		var saveErr error
+		if app.store != nil && rec.DomainInfo != nil {
+			rec.DomainInfo.Lock()
+			rec.DomainInfo.Subdomains = subRes
+			rec.DomainInfo.Unlock()
+			saveErr = app.store.UpdateDomainScan(scanID, rec.DomainInfo, "", rec.CheckVulns)
+		}
+
+		app.runOnUI(func() {
+			app.scanning = false
+			if saveErr != nil {
+				app.statusText = fmt.Sprintf("Subdomain save error: %v", saveErr)
+				return
+			}
+			app.statusText = fmt.Sprintf("Discovered %d subdomains for %s (%d active)", subRes.TotalFound, domain, subRes.ActiveCount)
+			app.RefreshHistory()
+			app.SelectScan(scanID)
+		})
+	}()
+}
+
 func (app *DesktopApp) View(c *ui.Context) {
 	if app.textScale <= 0 {
 		app.textScale = 1.0
@@ -1025,7 +1068,10 @@ func (app *DesktopApp) renderDomainDetails(c *ui.Context, t *ui.Theme, scanID in
 		}
 	})
 
-	// 3. Ping & Traceroute Network Diagnostics
+	// 3. Passive Subdomain Enumeration (Certificate Transparency & DNS)
+	app.renderSubdomainEnumerationCard(c, t, scanID, info)
+
+	// 4. Ping & Traceroute Network Diagnostics
 	app.renderPingAndTracerouteCards(c, t, scanID, info.Domain, info.Ping, info.Traceroute)
 
 	// 4. WAF & Edge Protection (with CNAME chain drill-downs & OWASP Browser Challenges)
@@ -1257,6 +1303,104 @@ func (app *DesktopApp) renderIPDetails(c *ui.Context, t *ui.Theme, scanID int64,
 	if len(info.Vulnerabilities) > 0 {
 		app.renderVulnerabilitiesCard(c, t, info.Vulnerabilities)
 	}
+}
+
+func (app *DesktopApp) renderSubdomainEnumerationCard(c *ui.Context, t *ui.Theme, scanID int64, info *analyzer.DomainInfo) {
+	apex := info.ApexDomain
+	if apex == "" {
+		apex = info.Domain
+	}
+
+	app.renderSectionCard(c, t, "Passive Subdomain Enumeration (CT Logs & DNS)", func() {
+		ui.Row(c).FillWidth().Gap(10).AlignItems(ui.Center).Wrap().Children(func() {
+			btnLabel := "Enumerate Subdomains"
+			if info.Subdomains != nil {
+				btnLabel = "Re-enumerate Subdomains ↻"
+			}
+			if ui.PrimaryButton(c, btnLabel).Disabled(app.scanning).Clicked() {
+				app.StartSubdomainEnum(scanID)
+			}
+
+			if info.Subdomains == nil {
+				ui.Text(c, fmt.Sprintf("Click 'Enumerate Subdomains' to discover subdomains of %s via Certificate Transparency (crt.sh) & DNS.", apex)).
+					FontSize(app.fs(12)).
+					TextColor(t.TextMuted)
+			} else {
+				ui.Badge(c, fmt.Sprintf("%d Discovered", info.Subdomains.TotalFound))
+				ui.Badge(c, fmt.Sprintf("%d Active (DNS)", info.Subdomains.ActiveCount))
+				if len(info.Subdomains.SourcesUsed) > 0 {
+					ui.Badge(c, "Sources: "+strings.Join(info.Subdomains.SourcesUsed, ", "))
+				}
+			}
+
+			ui.Spacer(c)
+			if apex != "" {
+				ui.Link(c, "Open crt.sh ↗", "https://crt.sh/?q=%25."+url.QueryEscape(apex))
+			}
+		})
+
+		if info.Subdomains != nil {
+			if info.Subdomains.Error != "" && len(info.Subdomains.Subdomains) == 0 {
+				ui.Text(c, "Subdomain lookup note: "+info.Subdomains.Error).FontSize(app.fs(12)).TextColor(t.Danger)
+				return
+			}
+			if len(info.Subdomains.Subdomains) == 0 {
+				ui.Text(c, "No additional subdomains discovered.").FontSize(app.fs(12)).TextColor(t.TextMuted)
+				return
+			}
+
+			for _, s := range info.Subdomains.Subdomains {
+				subItem := s
+				ui.Box(c).Key("sub:"+subItem.Subdomain).FillWidth().Padding(8).Radius(6).Border(1, t.Border).Children(func() {
+					ui.Row(c).FillWidth().Gap(8).AlignItems(ui.Center).Wrap().Children(func() {
+						ui.Text(c, subItem.Subdomain).FontSize(app.fs(13)).Bold().Selectable()
+
+						if subItem.Active {
+							ui.Badge(c, "ACTIVE")
+						} else {
+							ui.Badge(c, "HISTORICAL (CT)")
+						}
+
+						if len(subItem.Sources) > 0 {
+							ui.Badge(c, strings.Join(subItem.Sources, "+"))
+						}
+
+						if len(subItem.IPAddresses) > 0 {
+							ui.Text(c, "IP: "+strings.Join(subItem.IPAddresses, ", ")).
+								FontSize(app.fs(12)).
+								TextColor(t.TextMuted).
+								Selectable()
+						}
+						if subItem.CNAME != "" {
+							ui.Text(c, "CNAME: "+subItem.CNAME).
+								FontSize(app.fs(12)).
+								TextColor(t.TextMuted).
+								Selectable()
+						}
+
+						ui.Spacer(c)
+
+						if !strings.EqualFold(subItem.Subdomain, info.Domain) {
+							lookupKey := strings.ToLower(strings.TrimSpace(subItem.Subdomain))
+							if existingID, exists := app.scannedTargets[lookupKey]; exists && existingID != scanID {
+								if ui.Button(c, "Open Scan →").Clicked() {
+									app.SelectScan(existingID)
+									app.activeTab = 0
+								}
+								if ui.Button(c, "Re-scan ↻").Disabled(app.scanning).Clicked() {
+									app.StartScan(subItem.Subdomain, scanID, "Subdomain")
+								}
+							} else {
+								if ui.PrimaryButton(c, "Scan Subdomain ↗").Disabled(app.scanning).Clicked() {
+									app.StartScan(subItem.Subdomain, scanID, "Subdomain")
+								}
+							}
+						}
+					})
+				})
+			}
+		}
+	})
 }
 
 func (app *DesktopApp) renderPingAndTracerouteCards(c *ui.Context, t *ui.Theme, scanID int64, target string, ping *analyzer.PingResult, trace *analyzer.TracerouteResult) {
