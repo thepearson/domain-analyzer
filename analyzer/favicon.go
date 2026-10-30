@@ -12,6 +12,8 @@ import (
 	"net/url"
 	"regexp"
 	"strings"
+	"sync"
+	"time"
 
 	_ "golang.org/x/image/bmp"
 	_ "golang.org/x/image/webp"
@@ -80,7 +82,63 @@ func FetchFavicon(pageURL string, htmlBody []byte, client *http.Client) []byte {
 		}
 	}
 
+	// 3. Fallback to Google s2 favicon service for the host
+	if !IsIPAddress(parsedBase.Hostname()) && strings.Contains(parsedBase.Hostname(), ".") {
+		s2URL := "https://www.google.com/s2/favicons?domain=" + url.QueryEscape(parsedBase.Hostname()) + "&sz=32"
+		if data := downloadAndNormalizeFavicon(s2URL, client); len(data) > 0 {
+			return data
+		}
+	}
+
 	return nil
+}
+
+// FetchTechFavicon fetches and normalizes the favicon for a technology's official website URL.
+func FetchTechFavicon(websiteURL string) []byte {
+	websiteURL = strings.TrimSpace(websiteURL)
+	if websiteURL == "" {
+		return nil
+	}
+	parsed, err := url.Parse(websiteURL)
+	if err != nil || parsed.Host == "" {
+		return nil
+	}
+
+	fastClient := &http.Client{
+		Timeout: 4 * time.Second,
+	}
+
+	origin := parsed.Scheme + "://" + parsed.Host
+	candidates := []string{
+		"https://www.google.com/s2/favicons?domain=" + url.QueryEscape(parsed.Hostname()) + "&sz=32",
+		origin + "/favicon.ico",
+		origin + "/favicon.png",
+	}
+
+	for _, c := range candidates {
+		if data := downloadAndNormalizeFavicon(c, fastClient); len(data) > 0 {
+			return data
+		}
+	}
+	return nil
+}
+
+// PopulateTechFavicons concurrently fetches favicons for a slice of TechDetail items.
+func PopulateTechFavicons(details []TechDetail) {
+	var wg sync.WaitGroup
+	for i := range details {
+		if len(details[i].Favicon) > 0 || details[i].Website == "" {
+			continue
+		}
+		wg.Add(1)
+		go func(idx int, site string) {
+			defer wg.Done()
+			if fav := FetchTechFavicon(site); len(fav) > 0 {
+				details[idx].Favicon = fav
+			}
+		}(i, details[i].Website)
+	}
+	wg.Wait()
 }
 
 func downloadAndNormalizeFavicon(iconURL string, client *http.Client) []byte {
@@ -264,4 +322,3 @@ func decodeICODIB(dib []byte) image.Image {
 	}
 	return img
 }
-

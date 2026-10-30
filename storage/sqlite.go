@@ -147,7 +147,6 @@ func (s *Store) SaveDomainScan(info *analyzer.DomainInfo, parentID int64, reason
 		return 0, fmt.Errorf("domain info is nil")
 	}
 	favicon := info.Web.Favicon
-	// Temporarily omit binary favicon from JSON payload so Raw JSON view stays clean and human-readable
 	info.Web.Favicon = nil
 	payload, err := json.MarshalIndent(info, "", "  ")
 	info.Web.Favicon = favicon
@@ -172,6 +171,46 @@ func (s *Store) SaveDomainScan(info *analyzer.DomainInfo, parentID int64, reason
 		return 0, fmt.Errorf("inserting domain scan: %w", err)
 	}
 	return res.LastInsertId()
+}
+
+// enrichWebTechDetails ensures every detected technology has its TechDetail entry and Website URL populated.
+func enrichWebTechDetails(web *analyzer.WebInfo) {
+	if web == nil {
+		return
+	}
+	if len(web.TechDetails) == 0 && len(web.TechStack) > 0 {
+		for _, name := range web.TechStack {
+			site, icon := analyzer.LookupTechAppInfo(name)
+			web.TechDetails = append(web.TechDetails, analyzer.TechDetail{
+				Name:    name,
+				Website: site,
+				Icon:    icon,
+			})
+		}
+		return
+	}
+	for i := range web.TechDetails {
+		if web.TechDetails[i].Website == "" {
+			site, icon := analyzer.LookupTechAppInfo(web.TechDetails[i].Name)
+			web.TechDetails[i].Website = site
+			if web.TechDetails[i].Icon == "" {
+				web.TechDetails[i].Icon = icon
+			}
+		}
+	}
+}
+
+func cleanWebInfoForRawJSON(web analyzer.WebInfo) analyzer.WebInfo {
+	cleaned := web
+	cleaned.Favicon = nil
+	if len(web.TechDetails) > 0 {
+		cleaned.TechDetails = make([]analyzer.TechDetail, len(web.TechDetails))
+		for i, td := range web.TechDetails {
+			td.Favicon = nil
+			cleaned.TechDetails[i] = td
+		}
+	}
+	return cleaned
 }
 
 // SaveIPScan persists a completed IPInfo scan and returns its new scan ID.
@@ -315,30 +354,34 @@ func (s *Store) GetScan(id int64) (*ScanRecord, error) {
 		rec.CreatedAt = t
 	}
 
-	// Ensure RawJSON is pretty-formatted even if loaded from an older compact record
-	var prettyBuf strings.Builder
-	var rawAny any
-	if err := json.Unmarshal([]byte(rec.RawJSON), &rawAny); err == nil {
-		if indented, err := json.MarshalIndent(rawAny, "", "  "); err == nil {
-			prettyBuf.Write(indented)
-			rec.RawJSON = prettyBuf.String()
-		}
-	}
-
 	if rec.TargetType == analyzer.TargetTypeIP {
 		var ipInfo analyzer.IPInfo
 		if err := json.Unmarshal([]byte(rec.RawJSON), &ipInfo); err != nil {
 			return nil, fmt.Errorf("unmarshaling ip scan %d: %w", id, err)
 		}
 		ipInfo.Web.Favicon = rec.Favicon
+		enrichWebTechDetails(&ipInfo.Web)
 		rec.IPInfo = &ipInfo
+
+		displayCopy := ipInfo
+		displayCopy.Web = cleanWebInfoForRawJSON(ipInfo.Web)
+		if indented, err := json.MarshalIndent(&displayCopy, "", "  "); err == nil {
+			rec.RawJSON = string(indented)
+		}
 	} else {
 		var domInfo analyzer.DomainInfo
 		if err := json.Unmarshal([]byte(rec.RawJSON), &domInfo); err != nil {
 			return nil, fmt.Errorf("unmarshaling domain scan %d: %w", id, err)
 		}
 		domInfo.Web.Favicon = rec.Favicon
+		enrichWebTechDetails(&domInfo.Web)
 		rec.DomainInfo = &domInfo
+
+		displayCopy := domInfo
+		displayCopy.Web = cleanWebInfoForRawJSON(domInfo.Web)
+		if indented, err := json.MarshalIndent(&displayCopy, "", "  "); err == nil {
+			rec.RawJSON = string(indented)
+		}
 	}
 
 	return &rec, nil

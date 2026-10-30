@@ -148,25 +148,29 @@ type DesktopApp struct {
 	scanning   bool
 	statusText string
 
-	scans           []storage.ScanSummary
-	currentScan     *storage.ScanRecord
-	currentPivots   []analyzer.PivotTarget
-	childScans      []storage.ScanSummary
-	scannedTargets  map[string]int64
-	rawJSONReadOnly string
-	jsonSpansDark   []ui.Span
-	jsonSpansLight  []ui.Span
-	faviconCache    map[int64]cachedFavicon
+	scans            []storage.ScanSummary
+	currentScan      *storage.ScanRecord
+	currentPivots    []analyzer.PivotTarget
+	childScans       []storage.ScanSummary
+	scannedTargets   map[string]int64
+	rawJSONReadOnly  string
+	jsonSpansDark    []ui.Span
+	jsonSpansLight   []ui.Span
+	faviconCache     map[int64]cachedFavicon
+	techFaviconCache map[string]cachedFavicon
+	techFetching     map[string]bool
 
 	mu sync.Mutex
 }
 
 func NewDesktopApp(store *storage.Store) *DesktopApp {
 	app := &DesktopApp{
-		store:          store,
-		sidebarWidth:   330,
-		scannedTargets: make(map[string]int64),
-		faviconCache:   make(map[int64]cachedFavicon),
+		store:            store,
+		sidebarWidth:     330,
+		scannedTargets:   make(map[string]int64),
+		faviconCache:     make(map[int64]cachedFavicon),
+		techFaviconCache: make(map[string]cachedFavicon),
+		techFetching:     make(map[string]bool),
 		runner: ScanRunnerFunc{
 			AnalyzeDomain: analyzer.Analyze,
 			AnalyzeIP:     analyzer.AnalyzeIP,
@@ -230,12 +234,40 @@ func (app *DesktopApp) SelectScan(id int64) {
 
 	if rec.TargetType == analyzer.TargetTypeIP {
 		app.currentPivots = analyzer.ExtractIPPivots(rec.IPInfo)
+		if rec.IPInfo != nil {
+			app.ensureTechFaviconsAsync(rec.IPInfo.Web.TechDetails)
+		}
 	} else {
 		app.currentPivots = analyzer.ExtractDomainPivots(rec.DomainInfo)
+		if rec.DomainInfo != nil {
+			app.ensureTechFaviconsAsync(rec.DomainInfo.Web.TechDetails)
+		}
 	}
 	if children, err := app.store.GetChildScans(id); err == nil {
 		app.childScans = children
 	}
+}
+
+func decodeFaviconEntry(raw []byte) cachedFavicon {
+	var entry cachedFavicon
+	entry.attempted = true
+	trimmed := bytes.TrimSpace(raw)
+	if len(trimmed) == 0 {
+		return entry
+	}
+	if bytes.HasPrefix(trimmed, []byte("<svg")) || (bytes.HasPrefix(trimmed, []byte("<?xml")) && bytes.Contains(trimmed, []byte("<svg"))) {
+		if svg, err := ui.ParseSVG(trimmed); err == nil {
+			entry.svg = svg
+		}
+	} else {
+		normalized := analyzer.NormalizeFaviconBytes(raw)
+		if len(normalized) > 0 {
+			if img, err := ui.DecodeImage(normalized); err == nil {
+				entry.img = img
+			}
+		}
+	}
+	return entry
 }
 
 // renderFavicon renders the decoded website favicon if present for a scan.
@@ -245,20 +277,7 @@ func (app *DesktopApp) renderFavicon(c *ui.Context, scanID int64, raw []byte, si
 	}
 	entry, ok := app.faviconCache[scanID]
 	if !ok {
-		entry.attempted = true
-		trimmed := bytes.TrimSpace(raw)
-		if bytes.HasPrefix(trimmed, []byte("<svg")) || (bytes.HasPrefix(trimmed, []byte("<?xml")) && bytes.Contains(trimmed, []byte("<svg"))) {
-			if svg, err := ui.ParseSVG(trimmed); err == nil {
-				entry.svg = svg
-			}
-		} else {
-			normalized := analyzer.NormalizeFaviconBytes(raw)
-			if len(normalized) > 0 {
-				if img, err := ui.DecodeImage(normalized); err == nil {
-					entry.img = img
-				}
-			}
-		}
+		entry = decodeFaviconEntry(raw)
 		app.faviconCache[scanID] = entry
 	}
 
@@ -267,6 +286,98 @@ func (app *DesktopApp) renderFavicon(c *ui.Context, scanID int64, raw []byte, si
 	} else if entry.svg != nil {
 		ui.Icon(c, entry.svg).Size(size, size)
 	}
+}
+
+// renderTechFavicon renders the decoded favicon for a detected technology.
+func (app *DesktopApp) renderTechFavicon(c *ui.Context, techName string, raw []byte, size float32) {
+	key := strings.ToLower(strings.TrimSpace(techName))
+	if key == "" {
+		return
+	}
+	entry, ok := app.techFaviconCache[key]
+	if !ok && len(raw) > 0 {
+		entry = decodeFaviconEntry(raw)
+		app.techFaviconCache[key] = entry
+	}
+	if entry.img != nil {
+		ui.Image(c, entry.img).Size(size, size).Radius(3)
+	} else if entry.svg != nil {
+		ui.Icon(c, entry.svg).Size(size, size)
+	}
+}
+
+// ensureTechFaviconsAsync fetches favicons in the background for any TechDetail from older scans that didn't have Favicon bytes stored yet.
+func (app *DesktopApp) ensureTechFaviconsAsync(details []analyzer.TechDetail) {
+	for _, td := range details {
+		key := strings.ToLower(strings.TrimSpace(td.Name))
+		if key == "" {
+			continue
+		}
+		if len(td.Favicon) > 0 {
+			if _, ok := app.techFaviconCache[key]; !ok {
+				app.techFaviconCache[key] = decodeFaviconEntry(td.Favicon)
+			}
+			continue
+		}
+		if _, ok := app.techFaviconCache[key]; ok || app.techFetching[key] || td.Website == "" {
+			continue
+		}
+		app.techFetching[key] = true
+		site := td.Website
+		go func(k, website string) {
+			raw := analyzer.FetchTechFavicon(website)
+			app.runOnUI(func() {
+				delete(app.techFetching, k)
+				if len(raw) > 0 {
+					app.techFaviconCache[k] = decodeFaviconEntry(raw)
+				} else {
+					app.techFaviconCache[k] = cachedFavicon{attempted: true}
+				}
+			})
+		}(key, site)
+	}
+}
+
+func (app *DesktopApp) renderTechStackList(c *ui.Context, t *ui.Theme, web analyzer.WebInfo) {
+	details := web.TechDetails
+	if len(details) == 0 && len(web.TechStack) > 0 {
+		for _, name := range web.TechStack {
+			site, icon := analyzer.LookupTechAppInfo(name)
+			details = append(details, analyzer.TechDetail{
+				Name:    name,
+				Website: site,
+				Icon:    icon,
+			})
+		}
+	}
+
+	if len(details) == 0 {
+		app.renderKeyValue(c, t, "Detected Tech Stack", "None fingerprinted")
+		return
+	}
+
+	ui.Row(c).FillWidth().Gap(8).AlignItems(ui.Center).Wrap().Children(func() {
+		ui.Text(c, "Detected Tech Stack:").FontSize(12).TextColor(t.TextMuted).MinWidth(140)
+		ui.Row(c).Gap(10).AlignItems(ui.Center).Wrap().Children(func() {
+			for _, td := range details {
+				tech := td
+				label := tech.Name
+				if tech.Version != "" {
+					label = fmt.Sprintf("%s (%s)", tech.Name, tech.Version)
+				}
+				ui.Box(c).Key("tech:"+tech.Name).PaddingX(8).PaddingY(4).Radius(6).Background(t.Background).Border(1, t.Border).Children(func() {
+					ui.Row(c).Gap(6).AlignItems(ui.Center).Children(func() {
+						app.renderTechFavicon(c, tech.Name, tech.Favicon, 16)
+						if tech.Website != "" {
+							ui.Link(c, label+" ↗", tech.Website)
+						} else {
+							ui.Text(c, label).FontSize(13)
+						}
+					})
+				})
+			}
+		})
+	})
 }
 
 // StartScan launches a domain or IP scan asynchronously and persists the result to SQLite.
@@ -721,19 +832,7 @@ func (app *DesktopApp) renderDomainDetails(c *ui.Context, t *ui.Theme, scanID in
 
 	// 5. Web Tech Stack & Security Headers (Deterministically ordered!)
 	app.renderSectionCard(c, t, "Web Technologies & Security Headers", func() {
-		if len(info.Web.TechDetails) > 0 {
-			var techFormatted []string
-			for _, td := range info.Web.TechDetails {
-				if td.Version != "" {
-					techFormatted = append(techFormatted, fmt.Sprintf("%s (%s)", td.Name, td.Version))
-				} else {
-					techFormatted = append(techFormatted, td.Name)
-				}
-			}
-			app.renderKeyValue(c, t, "Detected Tech Stack", strings.Join(techFormatted, ", "))
-		} else {
-			app.renderKeyValue(c, t, "Detected Tech Stack", "None fingerprinted")
-		}
+		app.renderTechStackList(c, t, info.Web)
 
 		orderedHeaders := sortedSecurityHeaders(info.Web.SecurityHeaders)
 		if len(orderedHeaders) > 0 {
@@ -834,11 +933,7 @@ func (app *DesktopApp) renderIPDetails(c *ui.Context, t *ui.Theme, scanID int64,
 			})
 		}
 
-		if len(info.Web.TechStack) > 0 {
-			app.renderKeyValue(c, t, "Detected Tech Stack", strings.Join(info.Web.TechStack, ", "))
-		} else {
-			app.renderKeyValue(c, t, "Detected Tech Stack", "None fingerprinted")
-		}
+		app.renderTechStackList(c, t, info.Web)
 		orderedHeaders := sortedSecurityHeaders(info.Web.SecurityHeaders)
 		for _, kv := range orderedHeaders {
 			app.renderKeyValue(c, t, kv.Key, kv.Value)

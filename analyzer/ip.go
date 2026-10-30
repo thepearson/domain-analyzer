@@ -197,18 +197,25 @@ func AnalyzeIP(ip string, checkVulns bool) *IPInfo {
 		var techs []string
 		var details []TechDetail
 		if wappClient := getWappalyzerClient(); wappClient != nil {
-			fingerprints := wappClient.Fingerprint(resp.Header, body)
-			for techWithVersion := range fingerprints {
+			fingerprints := wappClient.FingerprintWithInfo(resp.Header, body)
+			for techWithVersion, appInfo := range fingerprints {
 				name := techWithVersion
 				version := ""
 				if parts := strings.SplitN(techWithVersion, ":", 2); len(parts) == 2 {
 					name = parts[0]
 					version = parts[1]
 				}
+				website := strings.TrimSpace(appInfo.Website)
+				icon := strings.TrimSpace(appInfo.Icon)
+				if website == "" {
+					website, icon = LookupTechAppInfo(name)
+				}
 				techs = append(techs, name)
 				details = append(details, TechDetail{
 					Name:    name,
 					Version: version,
+					Website: website,
+					Icon:    icon,
 				})
 			}
 		}
@@ -217,6 +224,8 @@ func AnalyzeIP(ip string, checkVulns bool) *IPInfo {
 		sort.Slice(details, func(i, j int) bool {
 			return details[i].Name < details[j].Name
 		})
+
+		PopulateTechFavicons(details)
 
 		finalPageURL := targetURL
 		if resp.Request != nil && resp.Request.URL != nil {

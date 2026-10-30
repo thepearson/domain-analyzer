@@ -84,7 +84,19 @@ func TestDesktopAppDrillDownAndFeatures(t *testing.T) {
 			IPTTL:     300,
 		},
 		Web: analyzer.WebInfo{
-			Favicon: makeSamplePNG(),
+			Favicon:   makeSamplePNG(),
+			TechStack: []string{"Cloudflare", "Nginx"},
+			TechDetails: []analyzer.TechDetail{
+				{
+					Name:    "Cloudflare",
+					Favicon: makeSamplePNG(),
+				},
+				{
+					Name:    "Nginx",
+					Version: "1.24.0",
+					Favicon: makeSamplePNG(),
+				},
+			},
 			SecurityHeaders: map[string]string{
 				"Strict-Transport-Security": "max-age=31536000",
 				"X-Frame-Options":           "SAMEORIGIN",
@@ -140,6 +152,12 @@ func TestDesktopAppDrillDownAndFeatures(t *testing.T) {
 	}
 	if !tester.HasText("OWASP XSS Challenge ↗") {
 		t.Errorf("expected UI to render OWASP XSS Challenge link")
+	}
+	if !tester.HasText("Cloudflare ↗") {
+		t.Errorf("expected UI to render clickable tech link 'Cloudflare ↗'")
+	}
+	if !tester.HasText("Nginx (1.24.0) ↗") {
+		t.Errorf("expected UI to render clickable tech link 'Nginx (1.24.0) ↗'")
 	}
 
 	// Switch to Raw JSON tab and verify syntax-highlighted JSON & Copy button

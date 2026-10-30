@@ -7,7 +7,38 @@ import (
 	"sort"
 	"strings"
 	"time"
+
+	wappalyzer "github.com/projectdiscovery/wappalyzergo"
 )
+
+// LookupTechAppInfo returns the official website URL and icon name for a technology from Wappalyzer's database.
+func LookupTechAppInfo(name string) (website string, icon string) {
+	cleanName := strings.TrimSpace(strings.SplitN(name, ":", 2)[0])
+	if cleanName == "" {
+		return "", ""
+	}
+	client := getWappalyzerClient()
+	if client == nil {
+		return "", ""
+	}
+	compiled := client.GetCompiledFingerprints()
+	if compiled == nil || len(compiled.Apps) == 0 {
+		return "", ""
+	}
+
+	if fp, ok := compiled.Apps[cleanName]; ok && fp != nil {
+		info := wappalyzer.AppInfoFromFingerprint(fp)
+		return strings.TrimSpace(info.Website), strings.TrimSpace(info.Icon)
+	}
+
+	for appName, fp := range compiled.Apps {
+		if strings.EqualFold(appName, cleanName) && fp != nil {
+			info := wappalyzer.AppInfoFromFingerprint(fp)
+			return strings.TrimSpace(info.Website), strings.TrimSpace(info.Icon)
+		}
+	}
+	return "", ""
+}
 
 func getSecurityHeaders(domain string, info *DomainInfo) error {
 	client := &http.Client{
@@ -83,12 +114,12 @@ func getWebInfo(domain string, info *DomainInfo) error {
 			return fmt.Errorf("failed to initialize wappalyzer client")
 		}
 
-		// Fingerprint returns map[string]struct{} where keys can be "Tech:Version"
-		fingerprints := wappalyzerClient.Fingerprint(resp.Header, body)
+		// FingerprintWithInfo returns map[string]AppInfo where keys can be "Tech:Version"
+		fingerprints := wappalyzerClient.FingerprintWithInfo(resp.Header, body)
 
 		techs := []string{}
 		details := []TechDetail{}
-		for techWithVersion := range fingerprints {
+		for techWithVersion, appInfo := range fingerprints {
 			name := techWithVersion
 			version := ""
 
@@ -97,10 +128,18 @@ func getWebInfo(domain string, info *DomainInfo) error {
 				version = parts[1]
 			}
 
+			website := strings.TrimSpace(appInfo.Website)
+			icon := strings.TrimSpace(appInfo.Icon)
+			if website == "" {
+				website, icon = LookupTechAppInfo(name)
+			}
+
 			techs = append(techs, name)
 			details = append(details, TechDetail{
 				Name:    name,
 				Version: version,
+				Website: website,
+				Icon:    icon,
 			})
 		}
 
@@ -108,6 +147,8 @@ func getWebInfo(domain string, info *DomainInfo) error {
 		sort.Slice(details, func(i, j int) bool {
 			return details[i].Name < details[j].Name
 		})
+
+		PopulateTechFavicons(details)
 
 		finalPageURL := targetURL
 		if resp.Request != nil && resp.Request.URL != nil {

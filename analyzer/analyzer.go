@@ -50,6 +50,9 @@ type WebInfo struct {
 type TechDetail struct {
 	Name    string `json:"name"`
 	Version string `json:"version,omitempty"`
+	Website string `json:"website,omitempty"`
+	Icon    string `json:"icon,omitempty"`
+	Favicon []byte `json:"favicon,omitempty"`
 }
 
 type Vulnerability struct {
