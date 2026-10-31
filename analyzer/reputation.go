@@ -275,4 +275,3 @@ func BuildExternalReputationLinks(target string, isIP bool) []ReputationLink {
 		{Label: "Cisco Talos ↗", URL: "https://talosintelligence.com/reputation_center/lookup?search=" + esc},
 	}
 }
-

@@ -144,18 +144,34 @@ type cachedFavicon struct {
 	svg       *ui.SVG
 }
 
+const (
+	DomainTabSummary   = 0 // Summary, Registration, Primary IP & Reputation (DNSBL)
+	DomainTabDNS       = 1 // DNS Infrastructure, DNSSEC/SOA/IPv6/AXFR & Subdomains
+	DomainTabWebTLSWAF = 2 // WAF, TLS Grading, Web Tech/CVEs, HTTP Waterfall & Metadata
+	DomainTabEmail     = 3 // Email Deliverability (MX, SPF, DMARC, DKIM, MTA-STS, TLS-RPT, BIMI)
+	DomainTabNetwork   = 4 // Ping & Traceroute Network Diagnostics
+)
+
+const (
+	IPTabSummary   = 0 // IP Ownership, Reverse DNS (PTR) & Reputation (DNSBL)
+	IPTabWebTLSWAF = 1 // TLS Grading, Direct HTTP/WAF/Tech/CVEs, HTTP Waterfall & Metadata
+	IPTabNetwork   = 2 // Port & Service Discovery, Ping & Traceroute
+)
+
 type DesktopApp struct {
 	store  *storage.Store
 	win    *mygo.Window
 	runner ScanRunnerFunc
 
 	// UI state (accessed on UI thread)
-	sidebarWidth float32
-	textScale    float32
-	targetInput  string
-	checkVulns   bool
-	searchQuery  string
-	activeTab    int
+	sidebarWidth      float32
+	textScale         float32
+	targetInput       string
+	checkVulns        bool
+	searchQuery       string
+	activeTab         int
+	domainCategoryTab int
+	ipCategoryTab     int
 
 	scanning   bool
 	statusText string
@@ -1261,6 +1277,25 @@ func (app *DesktopApp) renderDetailPane(c *ui.Context, t *ui.Theme) {
 		}
 		ui.Tabs(c, &app.activeTab, tabLabels...)
 
+		// Categorized Sub-Tabs when viewing "Overview & Details"
+		if app.activeTab == 0 {
+			if scan.TargetType == analyzer.TargetTypeIP {
+				ui.Segmented(c, &app.ipCategoryTab,
+					"Summary & Reputation",
+					"Web, TLS & WAF",
+					"Ports & Network",
+				)
+			} else {
+				ui.Segmented(c, &app.domainCategoryTab,
+					"Summary & Reputation",
+					"DNS & Subdomains",
+					"Web, TLS & WAF",
+					"Email & Auth",
+					"Network & Ping",
+				)
+			}
+		}
+
 		ui.Scroll(c).Grow(1).FillWidth().Children(func() {
 			ui.Column(c).FillWidth().Gap(12).PaddingY(6).Children(func() {
 				switch app.activeTab {
@@ -1356,253 +1391,272 @@ func (app *DesktopApp) renderKeyValue(c *ui.Context, t *ui.Theme, key string, va
 }
 
 func (app *DesktopApp) renderDomainDetails(c *ui.Context, t *ui.Theme, scanID int64, info *analyzer.DomainInfo) {
-	// 1. Domain Registration & Overview (with Full WHOIS Browser Link)
-	app.renderSectionCard(c, t, "Registration & Domain Overview", func() {
-		app.renderKeyValue(c, t, "Domain", info.Domain)
-		if info.ApexDomain != "" && !strings.EqualFold(info.ApexDomain, info.Domain) {
-			app.renderPivotActionRow(c, t, scanID, "Apex Domain", info.ApexDomain, "Apex Domain")
-		} else {
-			app.renderKeyValue(c, t, "Apex Domain", info.ApexDomain)
-		}
-		app.renderKeyValue(c, t, "Registrar", info.Registrar)
-		app.renderKeyValue(c, t, "Expiration Date", info.ExpiryDate)
-
-		whoisLabel, whoisURL := WhoisBrowserURL(info.Domain, info.ApexDomain)
-		if whoisURL != "" {
-			ui.Row(c).FillWidth().Gap(8).AlignItems(ui.Center).Wrap().Children(func() {
-				ui.Text(c, "External WHOIS:").FontSize(app.fs(12)).TextColor(t.TextMuted).MinWidth(140)
-				ui.Link(c, whoisLabel, whoisURL)
-			})
-		}
-	})
-
-	// 2. DNS & IP Infrastructure (with IP & NS drill-downs)
-	app.renderSectionCard(c, t, "DNS & IP Infrastructure", func() {
-		if info.DNS.IPAddress != "" {
-			app.renderPivotActionRow(c, t, scanID, "A Record IP", info.DNS.IPAddress, "A Record")
-			app.renderKeyValue(c, t, "IP Owner & TTL", fmt.Sprintf("%s (TTL: %ds)", info.DNS.IPOwner, info.DNS.IPTTL))
-		} else {
-			app.renderKeyValue(c, t, "A Record IP", "None resolved")
-		}
-
-		if info.DNS.WWWAddress != "" {
-			app.renderPivotActionRow(c, t, scanID, "WWW Record IP", info.DNS.WWWAddress, "WWW Record")
-		}
-
-		if len(info.DNS.NSProviders) > 0 {
-			app.renderKeyValue(c, t, "NS Providers", strings.Join(info.DNS.NSProviders, ", "))
-		}
-
-		if len(info.DNS.Nameservers) > 0 {
-			ui.Text(c, "Nameservers:").FontSize(app.fs(12)).TextColor(t.TextMuted)
-			for _, ns := range info.DNS.Nameservers {
-				app.renderPivotActionRow(c, t, scanID, "", ns, "Nameserver")
-			}
-		}
-
-		if info.DNS.CAARecord != nil && len(info.DNS.CAARecord.RawRecords) > 0 {
-			app.renderKeyValue(c, t, "CAA Records", strings.Join(info.DNS.CAARecord.RawRecords, "; "))
-		}
-	})
-
-	// 2b. DNSSEC, SOA, IPv6 (AAAA) & Zone Transfer (AXFR) Audit
-	app.renderZoneAuditCard(c, t, scanID, info)
-
-	// 3. Passive Subdomain Enumeration (Certificate Transparency & DNS)
-	app.renderSubdomainEnumerationCard(c, t, scanID, info)
-
-	// 4. Ping & Traceroute Network Diagnostics
-	app.renderPingAndTracerouteCards(c, t, scanID, info.Domain, info.Ping, info.Traceroute)
-
-	// 4. WAF & Edge Protection (with CNAME chain drill-downs & OWASP Browser Challenges)
-	app.renderSectionCard(c, t, "WAF & Edge Protection", func() {
-		app.renderKeyValue(c, t, "WAF Summary", info.WAF.Summary)
-		if info.WAF.BaselineStatus > 0 || info.WAF.ProbeStatus > 0 {
-			app.renderKeyValue(c, t, "HTTP Probe Status", fmt.Sprintf("Baseline: HTTP %d → XSS Probe: HTTP %d", info.WAF.BaselineStatus, info.WAF.ProbeStatus))
-		}
-
-		// OWASP Passive/Challenge Links in Default Browser
-		challenges := buildOWASPChallengeLinks(info.Domain, info.WAF)
-		if len(challenges) > 0 {
-			ui.Row(c).FillWidth().Gap(10).AlignItems(ui.Center).Wrap().Children(func() {
-				ui.Text(c, "OWASP Browser Challenges:").FontSize(app.fs(12)).TextColor(t.TextMuted).MinWidth(140)
-				for _, ch := range challenges {
-					ui.Link(c, ch.Label, ch.URL)
-				}
-			})
-		}
-
-		if len(info.WAF.CNAMEs) > 0 {
-			ui.Text(c, "CNAME Chain (Drill-Down):").FontSize(app.fs(12)).TextColor(t.TextMuted)
-			for _, cname := range info.WAF.CNAMEs {
-				app.renderPivotActionRow(c, t, scanID, "", cname, "CNAME")
-			}
-		}
-
-		for _, prov := range info.WAF.Providers {
-			ui.Box(c).Key("wafprov:"+prov.Provider).FillWidth().Padding(8).Radius(6).Border(1, t.Border).Children(func() {
-				ui.Column(c).FillWidth().Gap(4).Children(func() {
-					ui.Row(c).Gap(6).AlignItems(ui.Center).Children(func() {
-						ui.Text(c, prov.Provider).Bold()
-						ui.Badge(c, prov.State)
-					})
-					if len(prov.Implementation) > 0 {
-						ui.Text(c, "Implementation: "+strings.Join(prov.Implementation, " | ")).FontSize(app.fs(12))
-					}
-					if len(prov.Evidence) > 0 {
-						ui.Text(c, "Evidence: "+strings.Join(prov.Evidence, ", ")).FontSize(app.fs(11)).TextColor(t.TextMuted)
-					}
-				})
-			})
-		}
-
-		for _, note := range info.WAF.OriginNotes {
-			ui.Text(c, "Origin Note: "+note).FontSize(app.fs(12))
-		}
-	})
-
-	// 4. Deep TLS & Cipher Suite Grading + Discovered SAN Domains
-	app.renderTLSGradingCard(c, t, scanID, info.Domain, &info.TLS)
-
-	// 5. Web Tech Stack & Security Headers (Deterministically ordered!) + On-Demand CVE Check
-	app.renderSectionCard(c, t, "Web Technologies & Security Headers", func() {
-		app.renderTechStackList(c, t, info.Web)
-		app.renderWebCVESection(c, t, scanID, info.VulnsChecked, info.Vulnerabilities)
-
-		orderedHeaders := sortedSecurityHeaders(info.Web.SecurityHeaders)
-		if len(orderedHeaders) > 0 {
-			ui.Text(c, "HTTP Security Headers:").FontSize(app.fs(12)).TextColor(t.TextMuted)
-			for _, kv := range orderedHeaders {
-				app.renderKeyValue(c, t, kv.Key, kv.Value)
-			}
-		}
-	})
-
-	// 6. HTTP Redirect Chain & Performance Timing Waterfall
-	app.renderHTTPTraceCard(c, t, scanID, info.Domain, info.HTTPTrace)
-
-	// 7. Website Metadata & Well-Known Files (robots.txt, security.txt, sitemap.xml)
-	app.renderMetadataCard(c, t, scanID, info.Domain, info.Metadata)
-
-	// 8. Email Deliverability & Authentication Deep-Dive (MX, SPF, DMARC, DKIM, MTA-STS, TLS-RPT, BIMI)
-	app.renderEmailAuthCard(c, t, scanID, info)
-
-	// 9. DNSBL / Reputation & Blacklist Check
-	app.renderReputationCard(c, t, scanID, info.Domain, false, info.Reputation)
-}
-
-func (app *DesktopApp) renderIPDetails(c *ui.Context, t *ui.Theme, scanID int64, info *analyzer.IPInfo) {
-	// 1. IP WHOIS & Network Ownership
-	app.renderSectionCard(c, t, "IP Ownership & Network Details", func() {
-		app.renderKeyValue(c, t, "IP Address", info.IP)
-		app.renderKeyValue(c, t, "Organization / Owner", info.Owner)
-		app.renderKeyValue(c, t, "ASN", info.ASN)
-		app.renderKeyValue(c, t, "CIDR / NetRange", info.CIDR)
-		app.renderKeyValue(c, t, "Country", info.Country)
-
-		if info.IP != "" {
-			ui.Row(c).FillWidth().Gap(8).AlignItems(ui.Center).Wrap().Children(func() {
-				ui.Text(c, "External WHOIS:").FontSize(app.fs(12)).TextColor(t.TextMuted).MinWidth(140)
-				ui.Link(c, "Open Full IP WHOIS in Browser ↗", "https://who.is/whois-ip/ip-address/"+url.PathEscape(info.IP))
-			})
-		}
-	})
-
-	// 2. Port & Service Discovery on IP
-	app.renderSectionCard(c, t, "Port & Service Discovery", func() {
-		ui.Row(c).FillWidth().Gap(10).AlignItems(ui.Center).Wrap().Children(func() {
-			btnLabel := "Scan Host Ports"
-			if info.PortScanned {
-				btnLabel = "Re-scan Host Ports ↻"
-			}
-			if ui.PrimaryButton(c, btnLabel).Disabled(app.scanning).Clicked() {
-				checkVulns := false
-				if app.currentScan != nil {
-					checkVulns = app.currentScan.CheckVulns
-				}
-				app.StartPortScan(scanID, info, checkVulns)
-			}
-
-			if !info.PortScanned {
-				ui.Text(c, "Click 'Scan Host Ports' to probe common TCP ports and identify operating services.").
-					FontSize(app.fs(12)).
-					TextColor(t.TextMuted)
+	switch app.domainCategoryTab {
+	case DomainTabSummary:
+		// 1. Domain Registration & Overview (with Full WHOIS Browser Link & Primary IP)
+		app.renderSectionCard(c, t, "Registration & Domain Overview", func() {
+			app.renderKeyValue(c, t, "Domain", info.Domain)
+			if info.ApexDomain != "" && !strings.EqualFold(info.ApexDomain, info.Domain) {
+				app.renderPivotActionRow(c, t, scanID, "Apex Domain", info.ApexDomain, "Apex Domain")
 			} else {
-				ui.Badge(c, fmt.Sprintf("%d Open Ports Found", len(info.OpenPorts)))
+				app.renderKeyValue(c, t, "Apex Domain", info.ApexDomain)
+			}
+			app.renderKeyValue(c, t, "Registrar", info.Registrar)
+			app.renderKeyValue(c, t, "Expiration Date", info.ExpiryDate)
+
+			if info.DNS.IPAddress != "" {
+				app.renderPivotActionRow(c, t, scanID, "A Record IP", info.DNS.IPAddress, "A Record")
+				app.renderKeyValue(c, t, "IP Owner & TTL", fmt.Sprintf("%s (TTL: %ds)", info.DNS.IPOwner, info.DNS.IPTTL))
+			} else {
+				app.renderKeyValue(c, t, "A Record IP", "None resolved")
+			}
+
+			whoisLabel, whoisURL := WhoisBrowserURL(info.Domain, info.ApexDomain)
+			if whoisURL != "" {
+				ui.Row(c).FillWidth().Gap(8).AlignItems(ui.Center).Wrap().Children(func() {
+					ui.Text(c, "External WHOIS:").FontSize(app.fs(12)).TextColor(t.TextMuted).MinWidth(140)
+					ui.Link(c, whoisLabel, whoisURL)
+				})
 			}
 		})
 
-		if info.PortScanned {
-			if len(info.OpenPorts) == 0 {
-				ui.Text(c, "No open TCP ports detected on common service ports.").
-					FontSize(app.fs(12)).
-					TextColor(t.TextMuted)
+		// 2. DNSBL / Reputation & Blacklist Check
+		app.renderReputationCard(c, t, scanID, info.Domain, false, info.Reputation)
+
+	case DomainTabDNS:
+		// 1. DNS & IP Infrastructure (with IP & NS drill-downs)
+		app.renderSectionCard(c, t, "DNS & IP Infrastructure", func() {
+			if info.DNS.IPAddress != "" {
+				app.renderPivotActionRow(c, t, scanID, "A Record IP", info.DNS.IPAddress, "A Record")
+				app.renderKeyValue(c, t, "IP Owner & TTL", fmt.Sprintf("%s (TTL: %ds)", info.DNS.IPOwner, info.DNS.IPTTL))
 			} else {
-				for _, p := range info.OpenPorts {
-					portItem := p
-					ui.Box(c).Key(fmt.Sprintf("port:%d", portItem.Port)).FillWidth().Padding(8).Radius(6).Border(1, t.Border).Children(func() {
-						ui.Row(c).FillWidth().Gap(10).AlignItems(ui.Center).Wrap().Children(func() {
-							ui.Badge(c, fmt.Sprintf("TCP/%d", portItem.Port))
-							ui.Text(c, portItem.Service).FontSize(app.fs(13)).Bold()
-							ui.Badge(c, strings.ToUpper(portItem.State))
-							if portItem.Banner != "" {
-								ui.Text(c, "Banner: "+portItem.Banner).FontSize(app.fs(12)).TextColor(t.TextMuted).Selectable()
-							}
-						})
-					})
+				app.renderKeyValue(c, t, "A Record IP", "None resolved")
+			}
+
+			if info.DNS.WWWAddress != "" {
+				app.renderPivotActionRow(c, t, scanID, "WWW Record IP", info.DNS.WWWAddress, "WWW Record")
+			}
+
+			if len(info.DNS.NSProviders) > 0 {
+				app.renderKeyValue(c, t, "NS Providers", strings.Join(info.DNS.NSProviders, ", "))
+			}
+
+			if len(info.DNS.Nameservers) > 0 {
+				ui.Text(c, "Nameservers:").FontSize(app.fs(12)).TextColor(t.TextMuted)
+				for _, ns := range info.DNS.Nameservers {
+					app.renderPivotActionRow(c, t, scanID, "", ns, "Nameserver")
 				}
 			}
-		}
-	})
 
-	// 3. Ping & Traceroute Network Diagnostics
-	app.renderPingAndTracerouteCards(c, t, scanID, info.IP, info.Ping, info.Traceroute)
+			if info.DNS.CAARecord != nil && len(info.DNS.CAARecord.RawRecords) > 0 {
+				app.renderKeyValue(c, t, "CAA Records", strings.Join(info.DNS.CAARecord.RawRecords, "; "))
+			}
+		})
 
-	// 4. Reverse DNS (PTR) Hostnames
-	app.renderSectionCard(c, t, "Reverse DNS (PTR Hostnames)", func() {
-		if len(info.PTRRecords) == 0 {
-			ui.Text(c, "No PTR records found for this IP address.").FontSize(app.fs(12)).TextColor(t.TextMuted)
-			return
-		}
-		for _, ptr := range info.PTRRecords {
-			app.renderPivotActionRow(c, t, scanID, "PTR Hostname", ptr, "PTR Record")
-		}
-	})
+		// 2. DNSSEC, SOA, IPv6 (AAAA) & Zone Transfer (AXFR) Audit
+		app.renderZoneAuditCard(c, t, scanID, info)
 
-	// 4. Deep TLS & Cipher Suite Grading (:443) & Certificate Domains
-	app.renderTLSGradingCard(c, t, scanID, info.IP, &info.TLS)
+		// 3. Passive Subdomain Enumeration (Certificate Transparency & DNS)
+		app.renderSubdomainEnumerationCard(c, t, scanID, info)
 
-	// 4. Direct HTTP / WAF / Tech Stack on IP
-	app.renderSectionCard(c, t, "Direct HTTP, WAF & Tech Fingerprinting", func() {
-		app.renderKeyValue(c, t, "WAF Summary", info.WAF.Summary)
+	case DomainTabWebTLSWAF:
+		// 1. WAF & Edge Protection (with CNAME chain drill-downs & OWASP Browser Challenges)
+		app.renderSectionCard(c, t, "WAF & Edge Protection", func() {
+			app.renderKeyValue(c, t, "WAF Summary", info.WAF.Summary)
+			if info.WAF.BaselineStatus > 0 || info.WAF.ProbeStatus > 0 {
+				app.renderKeyValue(c, t, "HTTP Probe Status", fmt.Sprintf("Baseline: HTTP %d → XSS Probe: HTTP %d", info.WAF.BaselineStatus, info.WAF.ProbeStatus))
+			}
 
-		challenges := buildOWASPChallengeLinks(info.IP, info.WAF)
-		if len(challenges) > 0 {
+			// OWASP Passive/Challenge Links in Default Browser
+			challenges := buildOWASPChallengeLinks(info.Domain, info.WAF)
+			if len(challenges) > 0 {
+				ui.Row(c).FillWidth().Gap(10).AlignItems(ui.Center).Wrap().Children(func() {
+					ui.Text(c, "OWASP Browser Challenges:").FontSize(app.fs(12)).TextColor(t.TextMuted).MinWidth(140)
+					for _, ch := range challenges {
+						ui.Link(c, ch.Label, ch.URL)
+					}
+				})
+			}
+
+			if len(info.WAF.CNAMEs) > 0 {
+				ui.Text(c, "CNAME Chain (Drill-Down):").FontSize(app.fs(12)).TextColor(t.TextMuted)
+				for _, cname := range info.WAF.CNAMEs {
+					app.renderPivotActionRow(c, t, scanID, "", cname, "CNAME")
+				}
+			}
+
+			for _, prov := range info.WAF.Providers {
+				ui.Box(c).Key("wafprov:"+prov.Provider).FillWidth().Padding(8).Radius(6).Border(1, t.Border).Children(func() {
+					ui.Column(c).FillWidth().Gap(4).Children(func() {
+						ui.Row(c).Gap(6).AlignItems(ui.Center).Children(func() {
+							ui.Text(c, prov.Provider).Bold()
+							ui.Badge(c, prov.State)
+						})
+						if len(prov.Implementation) > 0 {
+							ui.Text(c, "Implementation: "+strings.Join(prov.Implementation, " | ")).FontSize(app.fs(12))
+						}
+						if len(prov.Evidence) > 0 {
+							ui.Text(c, "Evidence: "+strings.Join(prov.Evidence, ", ")).FontSize(app.fs(11)).TextColor(t.TextMuted)
+						}
+					})
+				})
+			}
+
+			for _, note := range info.WAF.OriginNotes {
+				ui.Text(c, "Origin Note: "+note).FontSize(app.fs(12))
+			}
+		})
+
+		// 2. Deep TLS & Cipher Suite Grading + Discovered SAN Domains
+		app.renderTLSGradingCard(c, t, scanID, info.Domain, &info.TLS)
+
+		// 3. Web Tech Stack & Security Headers (Deterministically ordered!) + On-Demand CVE Check
+		app.renderSectionCard(c, t, "Web Technologies & Security Headers", func() {
+			app.renderTechStackList(c, t, info.Web)
+			app.renderWebCVESection(c, t, scanID, info.VulnsChecked, info.Vulnerabilities)
+
+			orderedHeaders := sortedSecurityHeaders(info.Web.SecurityHeaders)
+			if len(orderedHeaders) > 0 {
+				ui.Text(c, "HTTP Security Headers:").FontSize(app.fs(12)).TextColor(t.TextMuted)
+				for _, kv := range orderedHeaders {
+					app.renderKeyValue(c, t, kv.Key, kv.Value)
+				}
+			}
+		})
+
+		// 4. HTTP Redirect Chain & Performance Timing Waterfall
+		app.renderHTTPTraceCard(c, t, scanID, info.Domain, info.HTTPTrace)
+
+		// 5. Website Metadata & Well-Known Files (robots.txt, security.txt, sitemap.xml)
+		app.renderMetadataCard(c, t, scanID, info.Domain, info.Metadata)
+
+	case DomainTabEmail:
+		// Email Deliverability & Authentication Deep-Dive (MX, SPF, DMARC, DKIM, MTA-STS, TLS-RPT, BIMI)
+		app.renderEmailAuthCard(c, t, scanID, info)
+
+	case DomainTabNetwork:
+		// Ping & Traceroute Network Diagnostics
+		app.renderPingAndTracerouteCards(c, t, scanID, info.Domain, info.Ping, info.Traceroute)
+	}
+}
+
+func (app *DesktopApp) renderIPDetails(c *ui.Context, t *ui.Theme, scanID int64, info *analyzer.IPInfo) {
+	switch app.ipCategoryTab {
+	case IPTabSummary:
+		// 1. IP WHOIS & Network Ownership
+		app.renderSectionCard(c, t, "IP Ownership & Network Details", func() {
+			app.renderKeyValue(c, t, "IP Address", info.IP)
+			app.renderKeyValue(c, t, "Organization / Owner", info.Owner)
+			app.renderKeyValue(c, t, "ASN", info.ASN)
+			app.renderKeyValue(c, t, "CIDR / NetRange", info.CIDR)
+			app.renderKeyValue(c, t, "Country", info.Country)
+
+			if info.IP != "" {
+				ui.Row(c).FillWidth().Gap(8).AlignItems(ui.Center).Wrap().Children(func() {
+					ui.Text(c, "External WHOIS:").FontSize(app.fs(12)).TextColor(t.TextMuted).MinWidth(140)
+					ui.Link(c, "Open Full IP WHOIS in Browser ↗", "https://who.is/whois-ip/ip-address/"+url.PathEscape(info.IP))
+				})
+			}
+		})
+
+		// 2. Reverse DNS (PTR) Hostnames
+		app.renderSectionCard(c, t, "Reverse DNS (PTR Hostnames)", func() {
+			if len(info.PTRRecords) == 0 {
+				ui.Text(c, "No PTR records found for this IP address.").FontSize(app.fs(12)).TextColor(t.TextMuted)
+				return
+			}
+			for _, ptr := range info.PTRRecords {
+				app.renderPivotActionRow(c, t, scanID, "PTR Hostname", ptr, "PTR Record")
+			}
+		})
+
+		// 3. DNSBL / Reputation & Blacklist Check
+		app.renderReputationCard(c, t, scanID, info.IP, true, info.Reputation)
+
+	case IPTabWebTLSWAF:
+		// 1. Deep TLS & Cipher Suite Grading (:443) & Certificate Domains
+		app.renderTLSGradingCard(c, t, scanID, info.IP, &info.TLS)
+
+		// 2. Direct HTTP / WAF / Tech Stack on IP
+		app.renderSectionCard(c, t, "Direct HTTP, WAF & Tech Fingerprinting", func() {
+			app.renderKeyValue(c, t, "WAF Summary", info.WAF.Summary)
+
+			challenges := buildOWASPChallengeLinks(info.IP, info.WAF)
+			if len(challenges) > 0 {
+				ui.Row(c).FillWidth().Gap(10).AlignItems(ui.Center).Wrap().Children(func() {
+					ui.Text(c, "OWASP Browser Challenges:").FontSize(app.fs(12)).TextColor(t.TextMuted).MinWidth(140)
+					for _, ch := range challenges {
+						ui.Link(c, ch.Label, ch.URL)
+					}
+				})
+			}
+
+			app.renderTechStackList(c, t, info.Web)
+			app.renderWebCVESection(c, t, scanID, info.VulnsChecked, info.Vulnerabilities)
+
+			orderedHeaders := sortedSecurityHeaders(info.Web.SecurityHeaders)
+			for _, kv := range orderedHeaders {
+				app.renderKeyValue(c, t, kv.Key, kv.Value)
+			}
+		})
+
+		// 3. HTTP Redirect Chain & Performance Timing Waterfall
+		app.renderHTTPTraceCard(c, t, scanID, info.IP, info.HTTPTrace)
+
+		// 4. Website Metadata & Well-Known Files (robots.txt, security.txt, sitemap.xml)
+		app.renderMetadataCard(c, t, scanID, info.IP, info.Metadata)
+
+	case IPTabNetwork:
+		// 1. Port & Service Discovery on IP
+		app.renderSectionCard(c, t, "Port & Service Discovery", func() {
 			ui.Row(c).FillWidth().Gap(10).AlignItems(ui.Center).Wrap().Children(func() {
-				ui.Text(c, "OWASP Browser Challenges:").FontSize(app.fs(12)).TextColor(t.TextMuted).MinWidth(140)
-				for _, ch := range challenges {
-					ui.Link(c, ch.Label, ch.URL)
+				btnLabel := "Scan Host Ports"
+				if info.PortScanned {
+					btnLabel = "Re-scan Host Ports ↻"
+				}
+				if ui.PrimaryButton(c, btnLabel).Disabled(app.scanning).Clicked() {
+					checkVulns := false
+					if app.currentScan != nil {
+						checkVulns = app.currentScan.CheckVulns
+					}
+					app.StartPortScan(scanID, info, checkVulns)
+				}
+
+				if !info.PortScanned {
+					ui.Text(c, "Click 'Scan Host Ports' to probe common TCP ports and identify operating services.").
+						FontSize(app.fs(12)).
+						TextColor(t.TextMuted)
+				} else {
+					ui.Badge(c, fmt.Sprintf("%d Open Ports Found", len(info.OpenPorts)))
 				}
 			})
-		}
 
-		app.renderTechStackList(c, t, info.Web)
-		app.renderWebCVESection(c, t, scanID, info.VulnsChecked, info.Vulnerabilities)
+			if info.PortScanned {
+				if len(info.OpenPorts) == 0 {
+					ui.Text(c, "No open TCP ports detected on common service ports.").
+						FontSize(app.fs(12)).
+						TextColor(t.TextMuted)
+				} else {
+					for _, p := range info.OpenPorts {
+						portItem := p
+						ui.Box(c).Key(fmt.Sprintf("port:%d", portItem.Port)).FillWidth().Padding(8).Radius(6).Border(1, t.Border).Children(func() {
+							ui.Row(c).FillWidth().Gap(10).AlignItems(ui.Center).Wrap().Children(func() {
+								ui.Badge(c, fmt.Sprintf("TCP/%d", portItem.Port))
+								ui.Text(c, portItem.Service).FontSize(app.fs(13)).Bold()
+								ui.Badge(c, strings.ToUpper(portItem.State))
+								if portItem.Banner != "" {
+									ui.Text(c, "Banner: "+portItem.Banner).FontSize(app.fs(12)).TextColor(t.TextMuted).Selectable()
+								}
+							})
+						})
+					}
+				}
+			}
+		})
 
-		orderedHeaders := sortedSecurityHeaders(info.Web.SecurityHeaders)
-		for _, kv := range orderedHeaders {
-			app.renderKeyValue(c, t, kv.Key, kv.Value)
-		}
-	})
-
-	// 5. HTTP Redirect Chain & Performance Timing Waterfall
-	app.renderHTTPTraceCard(c, t, scanID, info.IP, info.HTTPTrace)
-
-	// 6. Website Metadata & Well-Known Files (robots.txt, security.txt, sitemap.xml)
-	app.renderMetadataCard(c, t, scanID, info.IP, info.Metadata)
-
-	// 7. DNSBL / Reputation & Blacklist Check
-	app.renderReputationCard(c, t, scanID, info.IP, true, info.Reputation)
+		// 2. Ping & Traceroute Network Diagnostics
+		app.renderPingAndTracerouteCards(c, t, scanID, info.IP, info.Ping, info.Traceroute)
+	}
 }
 
 func (app *DesktopApp) renderHTTPTraceCard(c *ui.Context, t *ui.Theme, scanID int64, target string, trace *analyzer.HTTPTraceResult) {

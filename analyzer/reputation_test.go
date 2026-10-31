@@ -51,4 +51,3 @@ func TestBuildExternalReputationLinks(t *testing.T) {
 		t.Fatalf("expected external reputation links for IP")
 	}
 }
-

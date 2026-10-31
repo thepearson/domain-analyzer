@@ -421,23 +421,33 @@ func TestDesktopAppDrillDownAndFeatures(t *testing.T) {
 		},
 	}
 
-	tester := ui.NewTester(app.View, 1280, 5400)
+	tester := ui.NewTester(app.View, 1280, 2200)
 
-	// Verify initial seeded scan, .nz WHOIS link, and OWASP challenge links are displayed
+	// Verify initial seeded scan and .nz WHOIS link on the default "Summary & Reputation" sub-tab
 	if !tester.HasText("portal.example.co.nz") {
 		t.Fatalf("expected UI to render seeded domain 'portal.example.co.nz'")
 	}
 	if !tester.HasText("Open Full .nz WHOIS (DNC) ↗") {
-		t.Errorf("expected UI to render DNC .nz WHOIS link")
+		t.Errorf("expected UI to render DNC .nz WHOIS link on Summary & Reputation sub-tab")
+	}
+
+	// Switch to "Web, TLS & WAF" sub-tab to verify OWASP challenge links and tech stack links
+	if err := tester.Click("Web, TLS & WAF"); err != nil {
+		t.Fatalf("clicking 'Web, TLS & WAF' sub-tab failed: %v", err)
 	}
 	if !tester.HasText("OWASP XSS Challenge ↗") {
-		t.Errorf("expected UI to render OWASP XSS Challenge link")
+		t.Errorf("expected UI to render OWASP XSS Challenge link on Web, TLS & WAF sub-tab")
 	}
 	if !tester.HasText("Cloudflare ↗") {
 		t.Errorf("expected UI to render clickable tech link 'Cloudflare ↗'")
 	}
 	if !tester.HasText("Nginx (1.24.0) ↗") {
 		t.Errorf("expected UI to render clickable tech link 'Nginx (1.24.0) ↗'")
+	}
+
+	// Switch back to "Summary & Reputation" sub-tab
+	if err := tester.Click("Summary & Reputation"); err != nil {
+		t.Fatalf("clicking 'Summary & Reputation' sub-tab failed: %v", err)
 	}
 
 	// Test adjusting text size up and down in the GUI
@@ -500,7 +510,10 @@ func TestDesktopAppDrillDownAndFeatures(t *testing.T) {
 		t.Errorf("expected child scan tree indicator '└─' in sidebar")
 	}
 
-	// Run a host port scan on the IP scan result
+	// Switch to "Ports & Network" sub-tab on the IP scan and run a host port scan
+	if err := tester.Click("Ports & Network"); err != nil {
+		t.Fatalf("clicking 'Ports & Network' sub-tab on IP scan failed: %v", err)
+	}
 	if err := tester.Click("Scan Host Ports"); err != nil {
 		t.Fatalf("clicking 'Scan Host Ports' failed: %v", err)
 	}
@@ -527,7 +540,10 @@ func TestDesktopAppDrillDownAndFeatures(t *testing.T) {
 		t.Errorf("expected parent scan JSON export to include child IP scan and port scan data, got:\n%s", app.rawJSONReadOnly)
 	}
 
-	// Run Ping and Traceroute on the domain scan page
+	// Switch to "Network & Ping" sub-tab and run Ping and Traceroute on the domain scan
+	if err := tester.Click("Network & Ping"); err != nil {
+		t.Fatalf("clicking 'Network & Ping' sub-tab failed: %v", err)
+	}
 	if err := tester.Click("Run Ping"); err != nil {
 		t.Fatalf("clicking 'Run Ping' failed: %v", err)
 	}
@@ -556,97 +572,10 @@ func TestDesktopAppDrillDownAndFeatures(t *testing.T) {
 		t.Errorf("expected Traceroute hop IP and hostname to be rendered on scan page")
 	}
 
-	// Run Passive Subdomain Enumeration on the domain scan page
-	if err := tester.Click("Enumerate Subdomains"); err != nil {
-		t.Fatalf("clicking 'Enumerate Subdomains' failed: %v", err)
+	// Switch to "DNS & Subdomains" sub-tab and run DNSSEC/Zone Audit and Passive Subdomain Enumeration
+	if err := tester.Click("DNS & Subdomains"); err != nil {
+		t.Fatalf("clicking 'DNS & Subdomains' sub-tab failed: %v", err)
 	}
-	select {
-	case <-subDoneCh:
-	case <-time.After(3 * time.Second):
-		t.Fatalf("timed out waiting for background Subdomain Enumeration")
-	}
-	time.Sleep(50 * time.Millisecond)
-	tester.Frame()
-	if !tester.HasText("api.example.co.nz") || !tester.HasText("legacy.example.co.nz") {
-		t.Errorf("expected discovered subdomains to be rendered on scan page")
-	}
-
-	// Run Website Metadata & Well-Known Files inspection on the domain scan page
-	if err := tester.Click("Inspect Metadata"); err != nil {
-		t.Fatalf("clicking 'Inspect Metadata' failed: %v", err)
-	}
-	select {
-	case <-metaDoneCh:
-	case <-time.After(3 * time.Second):
-		t.Fatalf("timed out waiting for background Metadata Inspection")
-	}
-	time.Sleep(50 * time.Millisecond)
-	tester.Frame()
-	if !tester.HasText("/admin/secret") || !tester.HasText("mailto:security@example.co.nz") {
-		t.Errorf("expected robots.txt disallow path and security.txt contact to be rendered on scan page")
-	}
-
-	// Run Deep TLS & Cipher Suite Audit on the domain scan page
-	if err := tester.Click("Audit TLS & Ciphers"); err != nil {
-		t.Fatalf("clicking 'Audit TLS & Ciphers' failed: %v", err)
-	}
-	select {
-	case <-tlsDoneCh:
-	case <-time.After(3 * time.Second):
-		t.Fatalf("timed out waiting for background TLS Audit")
-	}
-	time.Sleep(50 * time.Millisecond)
-	tester.Frame()
-	if !tester.HasText("Grade: A+") || !tester.HasText("TLS_AES_128_GCM_SHA256 (ALPN: h2)") {
-		t.Errorf("expected TLS Grade A+ and cipher suite to be rendered on scan page")
-	}
-
-	// Run HTTP Redirect Chain & Performance Timing Waterfall trace on the domain scan page
-	if err := tester.Click("Trace Redirects & Timing"); err != nil {
-		t.Fatalf("clicking 'Trace Redirects & Timing' failed: %v", err)
-	}
-	select {
-	case <-httpDoneCh:
-	case <-time.After(3 * time.Second):
-		t.Fatalf("timed out waiting for background HTTP Trace")
-	}
-	time.Sleep(50 * time.Millisecond)
-	tester.Frame()
-	if !tester.HasText("HTTP → HTTPS Upgraded") || !tester.HasText("TTFB: 5.80 ms") {
-		t.Errorf("expected HTTP → HTTPS upgrade badge and waterfall TTFB timing to be rendered on scan page")
-	}
-
-	// Run on-demand CVE check inside "Web Technologies & Security Headers"
-	if err := tester.Click("Check CVEs"); err != nil {
-		t.Fatalf("clicking 'Check CVEs' button in Web Technologies section failed: %v", err)
-	}
-	select {
-	case <-vulnDoneCh:
-	case <-time.After(3 * time.Second):
-		t.Fatalf("timed out waiting for background CVE lookup")
-	}
-	time.Sleep(50 * time.Millisecond)
-	tester.Frame()
-	if !tester.HasText("CVE-2024-99999") || !tester.HasText("1 CVEs Found") {
-		t.Errorf("expected CVE-2024-99999 and '1 CVEs Found' badge to be rendered in Web Technologies section")
-	}
-
-	// Run Email Deliverability & Authentication Deep-Dive (DKIM, MTA-STS, TLS-RPT, BIMI)
-	if err := tester.Click("Audit Email Auth"); err != nil {
-		t.Fatalf("clicking 'Audit Email Auth' failed: %v", err)
-	}
-	select {
-	case <-emailDoneCh:
-	case <-time.After(3 * time.Second):
-		t.Fatalf("timed out waiting for background Email Auth Deep-Dive")
-	}
-	time.Sleep(50 * time.Millisecond)
-	tester.Frame()
-	if !tester.HasText("google._domainkey.example.co.nz") || !tester.HasText("MTA-STS: enforce") || !tester.HasText("BIMI: Present") {
-		t.Errorf("expected DKIM selector, MTA-STS enforce mode, and BIMI badge to be rendered on scan page")
-	}
-
-	// Run DNSSEC, SOA, IPv6 (AAAA) & Zone Transfer (AXFR) Audit
 	if err := tester.Click("Audit DNSSEC & Zone"); err != nil {
 		t.Fatalf("clicking 'Audit DNSSEC & Zone' failed: %v", err)
 	}
@@ -661,7 +590,102 @@ func TestDesktopAppDrillDownAndFeatures(t *testing.T) {
 		t.Errorf("expected DNSSEC status, IPv6 AAAA address, and AXFR status badge to be rendered on scan page")
 	}
 
-	// Run DNSBL / Reputation & Blacklist Check
+	if err := tester.Click("Enumerate Subdomains"); err != nil {
+		t.Fatalf("clicking 'Enumerate Subdomains' failed: %v", err)
+	}
+	select {
+	case <-subDoneCh:
+	case <-time.After(3 * time.Second):
+		t.Fatalf("timed out waiting for background Subdomain Enumeration")
+	}
+	time.Sleep(50 * time.Millisecond)
+	tester.Frame()
+	if !tester.HasText("api.example.co.nz") || !tester.HasText("legacy.example.co.nz") {
+		t.Errorf("expected discovered subdomains to be rendered on scan page")
+	}
+
+	// Switch to "Web, TLS & WAF" sub-tab and run TLS Audit, CVE Check, HTTP Trace, and Metadata Inspection
+	if err := tester.Click("Web, TLS & WAF"); err != nil {
+		t.Fatalf("clicking 'Web, TLS & WAF' sub-tab failed: %v", err)
+	}
+	if err := tester.Click("Audit TLS & Ciphers"); err != nil {
+		t.Fatalf("clicking 'Audit TLS & Ciphers' failed: %v", err)
+	}
+	select {
+	case <-tlsDoneCh:
+	case <-time.After(3 * time.Second):
+		t.Fatalf("timed out waiting for background TLS Audit")
+	}
+	time.Sleep(50 * time.Millisecond)
+	tester.Frame()
+	if !tester.HasText("Grade: A+") || !tester.HasText("TLS_AES_128_GCM_SHA256 (ALPN: h2)") {
+		t.Errorf("expected TLS Grade A+ and cipher suite to be rendered on scan page")
+	}
+
+	if err := tester.Click("Check CVEs"); err != nil {
+		t.Fatalf("clicking 'Check CVEs' button in Web Technologies section failed: %v", err)
+	}
+	select {
+	case <-vulnDoneCh:
+	case <-time.After(3 * time.Second):
+		t.Fatalf("timed out waiting for background CVE lookup")
+	}
+	time.Sleep(50 * time.Millisecond)
+	tester.Frame()
+	if !tester.HasText("CVE-2024-99999") || !tester.HasText("1 CVEs Found") {
+		t.Errorf("expected CVE-2024-99999 and '1 CVEs Found' badge to be rendered in Web Technologies section")
+	}
+
+	if err := tester.Click("Trace Redirects & Timing"); err != nil {
+		t.Fatalf("clicking 'Trace Redirects & Timing' failed: %v", err)
+	}
+	select {
+	case <-httpDoneCh:
+	case <-time.After(3 * time.Second):
+		t.Fatalf("timed out waiting for background HTTP Trace")
+	}
+	time.Sleep(50 * time.Millisecond)
+	tester.Frame()
+	if !tester.HasText("HTTP → HTTPS Upgraded") || !tester.HasText("TTFB: 5.80 ms") {
+		t.Errorf("expected HTTP → HTTPS upgrade badge and waterfall TTFB timing to be rendered on scan page")
+	}
+
+	if err := tester.Click("Inspect Metadata"); err != nil {
+		t.Fatalf("clicking 'Inspect Metadata' failed: %v", err)
+	}
+	select {
+	case <-metaDoneCh:
+	case <-time.After(3 * time.Second):
+		t.Fatalf("timed out waiting for background Metadata Inspection")
+	}
+	time.Sleep(50 * time.Millisecond)
+	tester.Frame()
+	if !tester.HasText("/admin/secret") || !tester.HasText("mailto:security@example.co.nz") {
+		t.Errorf("expected robots.txt disallow path and security.txt contact to be rendered on scan page")
+	}
+
+	// Switch to "Email & Auth" sub-tab and run Email Deliverability & Authentication Deep-Dive
+	if err := tester.Click("Email & Auth"); err != nil {
+		t.Fatalf("clicking 'Email & Auth' sub-tab failed: %v", err)
+	}
+	if err := tester.Click("Audit Email Auth"); err != nil {
+		t.Fatalf("clicking 'Audit Email Auth' failed: %v", err)
+	}
+	select {
+	case <-emailDoneCh:
+	case <-time.After(3 * time.Second):
+		t.Fatalf("timed out waiting for background Email Auth Deep-Dive")
+	}
+	time.Sleep(50 * time.Millisecond)
+	tester.Frame()
+	if !tester.HasText("google._domainkey.example.co.nz") || !tester.HasText("MTA-STS: enforce") || !tester.HasText("BIMI: Present") {
+		t.Errorf("expected DKIM selector, MTA-STS enforce mode, and BIMI badge to be rendered on scan page")
+	}
+
+	// Switch to "Summary & Reputation" sub-tab and run DNSBL / Reputation & Blacklist Check
+	if err := tester.Click("Summary & Reputation"); err != nil {
+		t.Fatalf("clicking 'Summary & Reputation' sub-tab failed: %v", err)
+	}
 	if err := tester.Click("Check Blacklists (DNSBL)"); err != nil {
 		t.Fatalf("clicking 'Check Blacklists (DNSBL)' failed: %v", err)
 	}
