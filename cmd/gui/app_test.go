@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"fmt"
 	"image"
 	"image/color"
 	"image/png"
@@ -485,6 +486,15 @@ func TestDesktopAppDrillDownAndFeatures(t *testing.T) {
 	}
 	if !strings.Contains(tester.Clipboard(), `"domain": "portal.example.co.nz"`) {
 		t.Errorf("expected formatted JSON in clipboard, got: %s", tester.Clipboard())
+	}
+
+	// Switch to Discovered Targets tab and verify compact pivot row summary
+	pivotsTabLabel := fmt.Sprintf("Discovered Targets (%d)", len(app.currentPivots))
+	if err := tester.Click(pivotsTabLabel); err != nil {
+		t.Fatalf("clicking %q tab failed: %v", pivotsTabLabel, err)
+	}
+	if !tester.HasText("Total Targets:") || !tester.HasText("example.co.nz") {
+		t.Errorf("expected Discovered Targets summary and apex domain pivot row to be rendered")
 	}
 
 	// Switch back to Overview & Details tab and drill down into IP

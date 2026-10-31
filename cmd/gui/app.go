@@ -1351,33 +1351,67 @@ func (app *DesktopApp) renderPivotActionRow(c *ui.Context, t *ui.Theme, parentSc
 		existingScanID = app.scannedTargets[lookupKey]
 	}
 
-	ui.Row(c).Key("pivot:" + reason + ":" + lookupKey).FillWidth().Gap(8).AlignItems(ui.Center).Wrap().Children(func() {
-		if label != "" {
-			ui.Text(c, label+":").FontSize(app.fs(12)).TextColor(t.TextMuted).MinWidth(130)
-		}
-		ui.Text(c, cleanTarget).FontSize(app.fs(13)).Bold().Selectable()
-		app.renderStatusPill(c, t, reason, toneInfo)
+	isIP := analyzer.IsIPAddress(cleanTarget)
+	typeBadge := "DOMAIN"
+	typeTone := toneInfo
+	if isIP {
+		typeBadge = "IP"
+		typeTone = toneNeutral
+	}
 
-		ui.Spacer(c)
+	borderCol := t.Border
+	if existingScanID > 0 {
+		borderCol = t.Success
+	}
 
-		if existingScanID > 0 && (app.currentScan == nil || existingScanID != app.currentScan.ID) {
-			viewLabel := "View Scan ✓"
-			if directChildID > 0 {
-				viewLabel = "View Child Scan ✓"
-			}
-			if ui.Button(c, viewLabel).Clicked() {
-				app.SelectScan(existingScanID)
-			}
-		}
+	ui.Box(c).
+		Key("pivot:"+reason+":"+lookupKey).
+		FillWidth().
+		PaddingX(10).
+		PaddingY(5).
+		Radius(6).
+		Background(t.Background).
+		Border(1, borderCol).
+		BorderStartWidth(3).
+		Children(func() {
+			ui.Row(c).FillWidth().Gap(8).AlignItems(ui.Center).Wrap().Children(func() {
+				if label != "" {
+					ui.Text(c, label+":").FontSize(app.fs(11)).TextColor(t.TextMuted).MinWidth(110)
+				}
+				app.renderStatusPill(c, t, typeBadge, typeTone)
+				ui.Text(c, cleanTarget).FontSize(app.fs(13)).Bold().Selectable()
+				if reason != "" && reason != typeBadge {
+					app.renderStatusPill(c, t, reason, toneInfo)
+				}
+				if directChildID > 0 {
+					app.renderStatusPill(c, t, "Child Scan ✓", toneSuccess)
+				} else if existingScanID > 0 {
+					app.renderStatusPill(c, t, "Scanned ✓", toneSuccess)
+				}
 
-		btnLabel := "Scan Domain ↗"
-		if analyzer.IsIPAddress(cleanTarget) {
-			btnLabel = "Scan IP ↗"
-		}
-		if ui.Button(c, btnLabel).Disabled(app.scanning).Clicked() {
-			app.StartScan(lookupKey, parentScanID, reason)
-		}
-	})
+				ui.Spacer(c)
+
+				ui.Row(c).Gap(6).AlignItems(ui.Center).Children(func() {
+					if existingScanID > 0 && (app.currentScan == nil || existingScanID != app.currentScan.ID) {
+						viewLabel := "View Scan ✓"
+						if directChildID > 0 {
+							viewLabel = "View Child Scan ✓"
+						}
+						if ui.Button(c, viewLabel).Clicked() {
+							app.SelectScan(existingScanID)
+						}
+					}
+
+					btnLabel := "Scan Domain ↗"
+					if isIP {
+						btnLabel = "Scan IP ↗"
+					}
+					if ui.Button(c, btnLabel).Disabled(app.scanning).Clicked() {
+						app.StartScan(lookupKey, parentScanID, reason)
+					}
+				})
+			})
+		})
 }
 
 type scorecardTone uint8
@@ -1938,9 +1972,11 @@ func (app *DesktopApp) renderDomainDetails(c *ui.Context, t *ui.Theme, scanID in
 
 			if len(info.DNS.Nameservers) > 0 {
 				ui.Text(c, "Nameservers:").FontSize(app.fs(12)).TextColor(t.TextMuted)
-				for _, ns := range info.DNS.Nameservers {
-					app.renderPivotActionRow(c, t, scanID, "", ns, "Nameserver")
-				}
+				ui.Column(c).FillWidth().Gap(4).Children(func() {
+					for _, ns := range info.DNS.Nameservers {
+						app.renderPivotActionRow(c, t, scanID, "", ns, "Nameserver")
+					}
+				})
 			}
 
 			if info.DNS.CAARecord != nil && len(info.DNS.CAARecord.RawRecords) > 0 {
@@ -1975,9 +2011,11 @@ func (app *DesktopApp) renderDomainDetails(c *ui.Context, t *ui.Theme, scanID in
 
 			if len(info.WAF.CNAMEs) > 0 {
 				ui.Text(c, "CNAME Chain (Drill-Down):").FontSize(app.fs(12)).TextColor(t.TextMuted)
-				for _, cname := range info.WAF.CNAMEs {
-					app.renderPivotActionRow(c, t, scanID, "", cname, "CNAME")
-				}
+				ui.Column(c).FillWidth().Gap(4).Children(func() {
+					for _, cname := range info.WAF.CNAMEs {
+						app.renderPivotActionRow(c, t, scanID, "", cname, "CNAME")
+					}
+				})
 			}
 
 			for _, prov := range info.WAF.Providers {
@@ -2060,9 +2098,11 @@ func (app *DesktopApp) renderIPDetails(c *ui.Context, t *ui.Theme, scanID int64,
 				ui.Text(c, "No PTR records found for this IP address.").FontSize(app.fs(12)).TextColor(t.TextMuted)
 				return
 			}
-			for _, ptr := range info.PTRRecords {
-				app.renderPivotActionRow(c, t, scanID, "PTR Hostname", ptr, "PTR Record")
-			}
+			ui.Column(c).FillWidth().Gap(4).Children(func() {
+				for _, ptr := range info.PTRRecords {
+					app.renderPivotActionRow(c, t, scanID, "PTR Hostname", ptr, "PTR Record")
+				}
+			})
 		})
 
 		// 3. DNSBL / Reputation & Blacklist Check
@@ -3337,9 +3377,11 @@ func (app *DesktopApp) renderEmailAuthCard(c *ui.Context, t *ui.Theme, scanID in
 
 		if len(email.MXRecords) > 0 {
 			ui.Text(c, "MX Servers (Drill-Down):").FontSize(app.fs(12)).TextColor(t.TextMuted)
-			for _, mx := range email.MXRecords {
-				app.renderPivotActionRow(c, t, scanID, "MX Host", mx, "MX Record")
-			}
+			ui.Column(c).FillWidth().Gap(4).Children(func() {
+				for _, mx := range email.MXRecords {
+					app.renderPivotActionRow(c, t, scanID, "MX Host", mx, "MX Record")
+				}
+			})
 		}
 
 		// 2. SPF
@@ -3347,9 +3389,11 @@ func (app *DesktopApp) renderEmailAuthCard(c *ui.Context, t *ui.Theme, scanID in
 			app.renderKeyValue(c, t, "SPF Status", fmt.Sprintf("%s — %s (%s)", email.SPFRecord.Status, email.SPFRecord.Policy, email.SPFRecord.Description))
 			if len(email.SPFRecord.Includes) > 0 {
 				ui.Text(c, "SPF Includes (Drill-Down):").FontSize(app.fs(12)).TextColor(t.TextMuted)
-				for _, inc := range email.SPFRecord.Includes {
-					app.renderPivotActionRow(c, t, scanID, "", inc, "SPF Include")
-				}
+				ui.Column(c).FillWidth().Gap(4).Children(func() {
+					for _, inc := range email.SPFRecord.Includes {
+						app.renderPivotActionRow(c, t, scanID, "", inc, "SPF Include")
+					}
+				})
 			}
 			app.renderCollapsibleRawRecord(c, t, fmt.Sprintf("spf-raw:%d", scanID), "SPF TXT Record", email.SPFRecord.Raw)
 		} else {
@@ -3512,15 +3556,57 @@ func (app *DesktopApp) renderPivotsTab(c *ui.Context, t *ui.Theme, scanID int64)
 		return
 	}
 
-	app.renderSectionCard(c, t, "Discovered Domains & IP Addresses (Click to Drill Down)", func() {
-		for _, pivot := range app.currentPivots {
-			p := pivot
-			typeLabel := "Domain"
-			if p.Type == analyzer.TargetTypeIP {
-				typeLabel = "IP Address"
-			}
-			app.renderPivotActionRow(c, t, scanID, typeLabel, p.Target, p.Reason)
+	domainCount := 0
+	ipCount := 0
+	scannedCount := 0
+	for _, p := range app.currentPivots {
+		clean := strings.TrimSpace(p.Target)
+		lookupKey := strings.ToLower(clean)
+		if !analyzer.IsIPAddress(clean) {
+			lookupKey = analyzer.CleanDomainTarget(clean)
 		}
+		if _, exists := app.scannedTargets[lookupKey]; exists {
+			scannedCount++
+		}
+		if p.Type == analyzer.TargetTypeIP {
+			ipCount++
+		} else {
+			domainCount++
+		}
+	}
+
+	app.renderSectionCard(c, t, "Discovered Domains & IP Addresses (Drill-Down / Pivoting)", func() {
+		ui.Row(c).FillWidth().Gap(8).AlignItems(ui.Center).Wrap().Children(func() {
+			ui.Text(c, fmt.Sprintf("%d Total Targets:", len(app.currentPivots))).FontSize(app.fs(12)).Bold()
+			if domainCount > 0 {
+				app.renderStatusPill(c, t, fmt.Sprintf("%d Domains", domainCount), toneInfo)
+			}
+			if ipCount > 0 {
+				app.renderStatusPill(c, t, fmt.Sprintf("%d IP Addresses", ipCount), toneNeutral)
+			}
+			if scannedCount > 0 {
+				app.renderStatusPill(c, t, fmt.Sprintf("%d Scanned", scannedCount), toneSuccess)
+			}
+			unscanned := len(app.currentPivots) - scannedCount
+			if unscanned > 0 {
+				app.renderStatusPill(c, t, fmt.Sprintf("%d Unscanned", unscanned), toneWarning)
+			}
+			ui.Spacer(c)
+			ui.Text(c, "Click 'Scan ↗' to drill down or 'View Scan ✓' to open saved scan.").
+				FontSize(app.fs(11)).
+				TextColor(t.TextMuted)
+		})
+
+		ui.Column(c).FillWidth().Gap(4).Children(func() {
+			for _, pivot := range app.currentPivots {
+				p := pivot
+				typeLabel := "Domain"
+				if p.Type == analyzer.TargetTypeIP {
+					typeLabel = "IP Address"
+				}
+				app.renderPivotActionRow(c, t, scanID, typeLabel, p.Target, p.Reason)
+			}
+		})
 	})
 }
 
@@ -3533,23 +3619,37 @@ func (app *DesktopApp) renderChildScansTab(c *ui.Context, t *ui.Theme) {
 	}
 
 	app.renderSectionCard(c, t, "Subsequent Scans Drilled Down From This Scan", func() {
-		for _, child := range app.childScans {
-			ch := child
-			ui.Row(c).Key(ch.ID).FillWidth().Gap(8).AlignItems(ui.Center).Children(func() {
-				app.renderFavicon(c, ch.ID, ch.Favicon, 16)
-				app.renderStatusPill(c, t, string(ch.TargetType), toneInfo)
-				ui.Text(c, ch.Target).Bold()
-				if ch.PivotReason != "" {
-					app.renderStatusPill(c, t, "via "+ch.PivotReason, toneNeutral)
-				}
-				ui.Text(c, ch.Summary).FontSize(app.fs(12)).TextColor(t.TextMuted)
-				ui.Spacer(c)
-				if ui.Button(c, "Open Scan →").Clicked() {
-					app.SelectScan(ch.ID)
-					app.activeTab = 0
-				}
-			})
-		}
+		ui.Column(c).FillWidth().Gap(6).Children(func() {
+			for _, child := range app.childScans {
+				ch := child
+				ui.Box(c).
+					Key(ch.ID).
+					FillWidth().
+					Padding(10).
+					Radius(6).
+					Background(t.Background).
+					Border(1, t.Border).
+					BorderStartWidth(3).
+					Children(func() {
+						ui.Row(c).FillWidth().Gap(8).AlignItems(ui.Center).Wrap().Children(func() {
+							app.renderFavicon(c, ch.ID, ch.Favicon, 16)
+							app.renderStatusPill(c, t, string(ch.TargetType), toneInfo)
+							ui.Text(c, ch.Target).Bold().FontSize(app.fs(13))
+							if ch.PivotReason != "" {
+								app.renderStatusPill(c, t, "via "+ch.PivotReason, toneNeutral)
+							}
+							if ch.Summary != "" {
+								ui.Text(c, ch.Summary).FontSize(app.fs(12)).TextColor(t.TextMuted)
+							}
+							ui.Spacer(c)
+							if ui.Button(c, "Open Scan →").Clicked() {
+								app.SelectScan(ch.ID)
+								app.activeTab = 0
+							}
+						})
+					})
+			}
+		})
 	})
 }
 
