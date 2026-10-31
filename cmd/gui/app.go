@@ -1227,14 +1227,15 @@ func (app *DesktopApp) renderDetailPane(c *ui.Context, t *ui.Theme) {
 			app.renderFavicon(c, scan.ID, scan.Favicon, 20)
 
 			badgeLabel := "DOMAIN SCAN"
+			badgeTone := toneInfo
 			if scan.TargetType == analyzer.TargetTypeIP {
 				badgeLabel = "IP SCAN"
 			}
-			ui.Badge(c, badgeLabel)
+			app.renderStatusPill(c, t, badgeLabel, badgeTone)
 			ui.Text(c, scan.Target).FontSize(app.fs(20)).Bold().Selectable()
 
 			if scan.PivotReason != "" {
-				ui.Badge(c, "via "+scan.PivotReason)
+				app.renderStatusPill(c, t, "via "+scan.PivotReason, toneNeutral)
 			}
 
 			ui.Spacer(c)
@@ -1353,7 +1354,7 @@ func (app *DesktopApp) renderPivotActionRow(c *ui.Context, t *ui.Theme, parentSc
 			ui.Text(c, label+":").FontSize(app.fs(12)).TextColor(t.TextMuted).MinWidth(130)
 		}
 		ui.Text(c, cleanTarget).FontSize(app.fs(13)).Bold().Selectable()
-		ui.Badge(c, reason)
+		app.renderStatusPill(c, t, reason, toneInfo)
 
 		ui.Spacer(c)
 
@@ -1381,6 +1382,7 @@ type scorecardTone uint8
 
 const (
 	toneNeutral scorecardTone = iota
+	toneInfo
 	toneSuccess
 	toneWarning
 	toneDanger
@@ -1394,8 +1396,117 @@ func (app *DesktopApp) toneColor(t *ui.Theme, tone scorecardTone) ui.Color {
 		return t.Warning
 	case toneDanger:
 		return t.Danger
+	case toneInfo:
+		return t.Accent
 	default:
 		return t.Accent
+	}
+}
+
+func (app *DesktopApp) pillColors(t *ui.Theme, tone scorecardTone) (bg, border, fg ui.Color) {
+	switch tone {
+	case toneSuccess:
+		if t.Dark {
+			return ui.RGBA(34, 197, 94, 0.16), ui.RGBA(34, 197, 94, 0.45), t.Success
+		}
+		return ui.RGBA(22, 163, 74, 0.12), ui.RGBA(22, 163, 74, 0.40), t.Success
+	case toneWarning:
+		if t.Dark {
+			return ui.RGBA(245, 158, 11, 0.16), ui.RGBA(245, 158, 11, 0.45), t.Warning
+		}
+		return ui.RGBA(217, 119, 6, 0.12), ui.RGBA(217, 119, 6, 0.40), t.Warning
+	case toneDanger:
+		if t.Dark {
+			return ui.RGBA(239, 68, 68, 0.18), ui.RGBA(239, 68, 68, 0.50), t.Danger
+		}
+		return ui.RGBA(220, 38, 38, 0.12), ui.RGBA(220, 38, 38, 0.45), t.Danger
+	case toneInfo:
+		if t.Dark {
+			return ui.RGBA(59, 130, 246, 0.16), ui.RGBA(59, 130, 246, 0.45), t.Accent
+		}
+		return ui.RGBA(37, 99, 235, 0.12), ui.RGBA(37, 99, 235, 0.40), t.Accent
+	default:
+		return t.Background, t.Border, t.TextMuted
+	}
+}
+
+// renderStatusPill renders a semantic color-coded rounded pill badge.
+func (app *DesktopApp) renderStatusPill(c *ui.Context, t *ui.Theme, text string, tone scorecardTone) {
+	bg, border, fg := app.pillColors(t, tone)
+	ui.Box(c).
+		PaddingX(8).
+		PaddingY(2).
+		Radius(999).
+		Background(bg).
+		Border(1, border).
+		Children(func() {
+			ui.Text(c, text).FontSize(app.fs(11)).Bold().TextColor(fg)
+		})
+}
+
+func wafStateTone(state string) scorecardTone {
+	low := strings.ToLower(state)
+	switch {
+	case strings.Contains(low, "enforc") || strings.Contains(low, "detect") || strings.Contains(low, "active"):
+		return toneSuccess
+	case strings.Contains(low, "passthrough") || strings.Contains(low, "monitor"):
+		return toneWarning
+	case strings.Contains(low, "origin"):
+		return toneInfo
+	default:
+		return toneNeutral
+	}
+}
+
+func httpStatusTone(code int) scorecardTone {
+	switch {
+	case code >= 200 && code < 300:
+		return toneSuccess
+	case code >= 300 && code < 400:
+		return toneInfo
+	case code >= 400:
+		return toneDanger
+	default:
+		return toneNeutral
+	}
+}
+
+func tlsGradeTone(grade string) scorecardTone {
+	switch strings.ToUpper(strings.TrimSpace(grade)) {
+	case "A+", "A":
+		return toneSuccess
+	case "B", "C":
+		return toneWarning
+	case "D", "F":
+		return toneDanger
+	default:
+		return toneInfo
+	}
+}
+
+func cveSeverityTone(sev string) scorecardTone {
+	switch strings.ToUpper(strings.TrimSpace(sev)) {
+	case "CRITICAL", "HIGH":
+		return toneDanger
+	case "MEDIUM":
+		return toneWarning
+	case "LOW":
+		return toneInfo
+	default:
+		return toneNeutral
+	}
+}
+
+func emailAuthStatusTone(status string) scorecardTone {
+	switch strings.ToLower(strings.TrimSpace(status)) {
+	case "secure", "valid", "enforced":
+		return toneSuccess
+	case "warning", "partial", "softfail", "neutral", "none", "testing":
+		return toneWarning
+	case "critical", "invalid", "missing", "vulnerable":
+		return toneDanger
+	default:
+		return toneNeutral
 	}
 }
 
@@ -1782,7 +1893,7 @@ func (app *DesktopApp) renderDomainDetails(c *ui.Context, t *ui.Theme, scanID in
 					ui.Column(c).FillWidth().Gap(4).Children(func() {
 						ui.Row(c).Gap(6).AlignItems(ui.Center).Children(func() {
 							ui.Text(c, prov.Provider).Bold()
-							ui.Badge(c, prov.State)
+							app.renderStatusPill(c, t, prov.State, wafStateTone(prov.State))
 						})
 						if len(prov.Implementation) > 0 {
 							ui.Text(c, "Implementation: "+strings.Join(prov.Implementation, " | ")).FontSize(app.fs(12))
@@ -1919,7 +2030,11 @@ func (app *DesktopApp) renderIPDetails(c *ui.Context, t *ui.Theme, scanID int64,
 						FontSize(app.fs(12)).
 						TextColor(t.TextMuted)
 				} else {
-					ui.Badge(c, fmt.Sprintf("%d Open Ports Found", len(info.OpenPorts)))
+					portSummaryTone := toneSuccess
+					if len(info.OpenPorts) > 0 {
+						portSummaryTone = toneWarning
+					}
+					app.renderStatusPill(c, t, fmt.Sprintf("%d Open Ports Found", len(info.OpenPorts)), portSummaryTone)
 				}
 			})
 
@@ -1933,9 +2048,9 @@ func (app *DesktopApp) renderIPDetails(c *ui.Context, t *ui.Theme, scanID int64,
 						portItem := p
 						ui.Box(c).Key(fmt.Sprintf("port:%d", portItem.Port)).FillWidth().Padding(8).Radius(6).Border(1, t.Border).Children(func() {
 							ui.Row(c).FillWidth().Gap(10).AlignItems(ui.Center).Wrap().Children(func() {
-								ui.Badge(c, fmt.Sprintf("TCP/%d", portItem.Port))
+								app.renderStatusPill(c, t, fmt.Sprintf("TCP/%d", portItem.Port), toneInfo)
 								ui.Text(c, portItem.Service).FontSize(app.fs(13)).Bold()
-								ui.Badge(c, strings.ToUpper(portItem.State))
+								app.renderStatusPill(c, t, strings.ToUpper(portItem.State), toneWarning)
 								if portItem.Banner != "" {
 									ui.Text(c, "Banner: "+portItem.Banner).FontSize(app.fs(12)).TextColor(t.TextMuted).Selectable()
 								}
@@ -1967,14 +2082,14 @@ func (app *DesktopApp) renderHTTPTraceCard(c *ui.Context, t *ui.Theme, scanID in
 					FontSize(app.fs(12)).
 					TextColor(t.TextMuted)
 			} else {
-				ui.Badge(c, fmt.Sprintf("%d Redirects", trace.RedirectCount))
+				app.renderStatusPill(c, t, fmt.Sprintf("%d Redirects", trace.RedirectCount), toneInfo)
 				if trace.FinalStatus > 0 {
-					ui.Badge(c, fmt.Sprintf("Final: HTTP %d", trace.FinalStatus))
+					app.renderStatusPill(c, t, fmt.Sprintf("Final: HTTP %d", trace.FinalStatus), httpStatusTone(trace.FinalStatus))
 				}
 				if trace.UpgradedHTTPS {
-					ui.Badge(c, "HTTP → HTTPS Upgraded")
+					app.renderStatusPill(c, t, "HTTP → HTTPS Upgraded", toneSuccess)
 				}
-				ui.Badge(c, fmt.Sprintf("Total Chain: %.1f ms", trace.TotalChainMs))
+				app.renderStatusPill(c, t, fmt.Sprintf("Total Chain: %.1f ms", trace.TotalChainMs), toneNeutral)
 			}
 		})
 
@@ -1995,9 +2110,9 @@ func (app *DesktopApp) renderHTTPTraceCard(c *ui.Context, t *ui.Theme, scanID in
 					ui.Row(c).FillWidth().Gap(8).AlignItems(ui.Center).Wrap().Children(func() {
 						ui.Text(c, "Performance Timing Waterfall").FontSize(app.fs(13)).Bold()
 						if wf.Protocol != "" {
-							ui.Badge(c, wf.Protocol)
+							app.renderStatusPill(c, t, wf.Protocol, toneInfo)
 						}
-						ui.Badge(c, fmt.Sprintf("HTTP %d", wf.StatusCode))
+						app.renderStatusPill(c, t, fmt.Sprintf("HTTP %d", wf.StatusCode), httpStatusTone(wf.StatusCode))
 						ui.Spacer(c)
 						if wf.URL != "" {
 							ui.Link(c, wf.URL+" ↗", wf.URL)
@@ -2005,12 +2120,12 @@ func (app *DesktopApp) renderHTTPTraceCard(c *ui.Context, t *ui.Theme, scanID in
 					})
 
 					ui.Row(c).FillWidth().Gap(8).AlignItems(ui.Center).Wrap().Children(func() {
-						ui.Badge(c, fmt.Sprintf("DNS Lookup: %.2f ms", wf.DNSMs))
-						ui.Badge(c, fmt.Sprintf("TCP Connect: %.2f ms", wf.TCPConnectMs))
-						ui.Badge(c, fmt.Sprintf("TLS Handshake: %.2f ms", wf.TLSHandshakeMs))
-						ui.Badge(c, fmt.Sprintf("TTFB: %.2f ms", wf.TTFBMs))
-						ui.Badge(c, fmt.Sprintf("Transfer: %.2f ms", wf.ContentTransferMs))
-						ui.Badge(c, fmt.Sprintf("Total: %.2f ms", wf.TotalMs))
+						app.renderStatusPill(c, t, fmt.Sprintf("DNS Lookup: %.2f ms", wf.DNSMs), toneInfo)
+						app.renderStatusPill(c, t, fmt.Sprintf("TCP Connect: %.2f ms", wf.TCPConnectMs), toneInfo)
+						app.renderStatusPill(c, t, fmt.Sprintf("TLS Handshake: %.2f ms", wf.TLSHandshakeMs), toneInfo)
+						app.renderStatusPill(c, t, fmt.Sprintf("TTFB: %.2f ms", wf.TTFBMs), toneInfo)
+						app.renderStatusPill(c, t, fmt.Sprintf("Transfer: %.2f ms", wf.ContentTransferMs), toneInfo)
+						app.renderStatusPill(c, t, fmt.Sprintf("Total: %.2f ms", wf.TotalMs), toneSuccess)
 					})
 				})
 			})
@@ -2030,14 +2145,14 @@ func (app *DesktopApp) renderHTTPTraceCard(c *ui.Context, t *ui.Theme, scanID in
 				ui.Box(c).Key(fmt.Sprintf("httphop:%d:%s", hop.Step, hop.URL)).FillWidth().Padding(8).Radius(6).Border(1, t.Border).Children(func() {
 					ui.Column(c).FillWidth().Gap(4).Children(func() {
 						ui.Row(c).FillWidth().Gap(8).AlignItems(ui.Center).Wrap().Children(func() {
-							ui.Badge(c, fmt.Sprintf("Hop #%d", hop.Step))
-							ui.Badge(c, hop.Status)
+							app.renderStatusPill(c, t, fmt.Sprintf("Hop #%d", hop.Step), toneNeutral)
+							app.renderStatusPill(c, t, hop.Status, httpStatusTone(hop.StatusCode))
 							if hop.Protocol != "" {
-								ui.Badge(c, hop.Protocol)
+								app.renderStatusPill(c, t, hop.Protocol, toneInfo)
 							}
-							ui.Badge(c, fmt.Sprintf("%.2f ms", hop.TotalMs))
+							app.renderStatusPill(c, t, fmt.Sprintf("%.2f ms", hop.TotalMs), toneNeutral)
 							if hop.Server != "" {
-								ui.Badge(c, "Server: "+hop.Server)
+								app.renderStatusPill(c, t, "Server: "+hop.Server, toneNeutral)
 							}
 							ui.Spacer(c)
 							ui.Link(c, hop.URL+" ↗", hop.URL)
@@ -2075,28 +2190,38 @@ func (app *DesktopApp) renderTLSGradingCard(c *ui.Context, t *ui.Theme, scanID i
 				ui.Text(c, "No TLS service detected on port 443.").FontSize(app.fs(12)).TextColor(t.TextMuted)
 			} else {
 				if tlsInfo.Grade != "" {
-					ui.Badge(c, "Grade: "+tlsInfo.Grade)
+					app.renderStatusPill(c, t, "Grade: "+tlsInfo.Grade, tlsGradeTone(tlsInfo.Grade))
 				}
 				if tlsInfo.NegotiatedVersion != "" {
-					ui.Badge(c, tlsInfo.NegotiatedVersion)
+					verTone := toneInfo
+					if tlsInfo.NegotiatedVersion == "TLS 1.3" {
+						verTone = toneSuccess
+					} else if strings.Contains(tlsInfo.NegotiatedVersion, "1.0") || strings.Contains(tlsInfo.NegotiatedVersion, "1.1") {
+						verTone = toneDanger
+					}
+					app.renderStatusPill(c, t, tlsInfo.NegotiatedVersion, verTone)
 				}
 				if tlsInfo.ChainValid {
-					ui.Badge(c, "Chain Trusted")
+					app.renderStatusPill(c, t, "Chain Trusted", toneSuccess)
 				} else if tlsInfo.Grade != "" {
-					ui.Badge(c, "Chain Untrusted")
+					app.renderStatusPill(c, t, "Chain Untrusted", toneDanger)
 				}
 				if tlsInfo.TLSExpiry != "" {
 					if tlsInfo.DaysRemaining < 0 {
-						ui.Badge(c, fmt.Sprintf("EXPIRED (%dd ago)", -tlsInfo.DaysRemaining))
+						app.renderStatusPill(c, t, fmt.Sprintf("EXPIRED (%dd ago)", -tlsInfo.DaysRemaining), toneDanger)
 					} else if tlsInfo.DaysRemaining > 0 || tlsInfo.Grade != "" {
-						ui.Badge(c, fmt.Sprintf("%d Days Remaining", tlsInfo.DaysRemaining))
+						expTone := toneSuccess
+						if tlsInfo.DaysRemaining < 30 {
+							expTone = toneWarning
+						}
+						app.renderStatusPill(c, t, fmt.Sprintf("%d Days Remaining", tlsInfo.DaysRemaining), expTone)
 					}
 				}
 				if tlsInfo.HasCertTransparency {
-					ui.Badge(c, "CT SCT: Present")
+					app.renderStatusPill(c, t, "CT SCT: Present", toneSuccess)
 				}
 				if tlsInfo.OCSPStapled {
-					ui.Badge(c, "OCSP Stapled")
+					app.renderStatusPill(c, t, "OCSP Stapled", toneSuccess)
 				}
 			}
 		})
@@ -2183,19 +2308,19 @@ func (app *DesktopApp) renderMetadataCard(c *ui.Context, t *ui.Theme, scanID int
 					TextColor(t.TextMuted)
 			} else {
 				if meta.RobotsTxt.Found {
-					ui.Badge(c, fmt.Sprintf("robots.txt: %d Disallow", len(meta.RobotsTxt.DisallowedPaths)))
+					app.renderStatusPill(c, t, fmt.Sprintf("robots.txt: %d Disallow", len(meta.RobotsTxt.DisallowedPaths)), toneSuccess)
 				} else {
-					ui.Badge(c, "robots.txt: Not Found")
+					app.renderStatusPill(c, t, "robots.txt: Not Found", toneNeutral)
 				}
 				if meta.SecurityTxt.Found {
-					ui.Badge(c, "security.txt: Present")
+					app.renderStatusPill(c, t, "security.txt: Present", toneSuccess)
 				} else {
-					ui.Badge(c, "security.txt: Missing")
+					app.renderStatusPill(c, t, "security.txt: Missing", toneWarning)
 				}
 				if meta.Sitemap.Found {
-					ui.Badge(c, fmt.Sprintf("sitemap.xml: %d URLs", meta.Sitemap.URLCount))
+					app.renderStatusPill(c, t, fmt.Sprintf("sitemap.xml: %d URLs", meta.Sitemap.URLCount), toneSuccess)
 				} else {
-					ui.Badge(c, "sitemap.xml: Not Found")
+					app.renderStatusPill(c, t, "sitemap.xml: Not Found", toneNeutral)
 				}
 			}
 		})
@@ -2224,9 +2349,9 @@ func (app *DesktopApp) renderMetadataCard(c *ui.Context, t *ui.Theme, scanID int
 				ui.Row(c).FillWidth().Gap(8).AlignItems(ui.Center).Wrap().Children(func() {
 					ui.Text(c, "robots.txt").FontSize(app.fs(13)).Bold()
 					if meta.RobotsTxt.Found {
-						ui.Badge(c, "FOUND")
+						app.renderStatusPill(c, t, "FOUND", toneSuccess)
 					} else {
-						ui.Badge(c, "NOT FOUND")
+						app.renderStatusPill(c, t, "NOT FOUND", toneNeutral)
 					}
 					ui.Spacer(c)
 					robotsURL := meta.RobotsTxt.URL
@@ -2246,7 +2371,7 @@ func (app *DesktopApp) renderMetadataCard(c *ui.Context, t *ui.Theme, scanID int
 						ui.Row(c).FillWidth().Gap(6).AlignItems(ui.Center).Wrap().Children(func() {
 							ui.Text(c, "Disallowed Paths:").FontSize(app.fs(12)).TextColor(t.TextMuted).MinWidth(140)
 							for _, p := range meta.RobotsTxt.DisallowedPaths {
-								ui.Badge(c, p)
+								app.renderStatusPill(c, t, p, toneInfo)
 							}
 						})
 					}
@@ -2273,9 +2398,9 @@ func (app *DesktopApp) renderMetadataCard(c *ui.Context, t *ui.Theme, scanID int
 				ui.Row(c).FillWidth().Gap(8).AlignItems(ui.Center).Wrap().Children(func() {
 					ui.Text(c, "security.txt (RFC 9116)").FontSize(app.fs(13)).Bold()
 					if meta.SecurityTxt.Found {
-						ui.Badge(c, "PRESENT")
+						app.renderStatusPill(c, t, "PRESENT", toneSuccess)
 					} else {
-						ui.Badge(c, "MISSING")
+						app.renderStatusPill(c, t, "MISSING", toneWarning)
 					}
 					ui.Spacer(c)
 					secURL := meta.SecurityTxt.URL
@@ -2327,13 +2452,13 @@ func (app *DesktopApp) renderMetadataCard(c *ui.Context, t *ui.Theme, scanID int
 					ui.Text(c, "sitemap.xml").FontSize(app.fs(13)).Bold()
 					if meta.Sitemap.Found {
 						if meta.Sitemap.IsIndex {
-							ui.Badge(c, "SITEMAP INDEX")
+							app.renderStatusPill(c, t, "SITEMAP INDEX", toneSuccess)
 						} else {
-							ui.Badge(c, "URL SET")
+							app.renderStatusPill(c, t, "URL SET", toneSuccess)
 						}
-						ui.Badge(c, fmt.Sprintf("%d Entries", meta.Sitemap.URLCount))
+						app.renderStatusPill(c, t, fmt.Sprintf("%d Entries", meta.Sitemap.URLCount), toneInfo)
 					} else {
-						ui.Badge(c, "NOT FOUND")
+						app.renderStatusPill(c, t, "NOT FOUND", toneNeutral)
 					}
 					ui.Spacer(c)
 					smURL := meta.Sitemap.URL
@@ -2392,10 +2517,10 @@ func (app *DesktopApp) renderSubdomainEnumerationCard(c *ui.Context, t *ui.Theme
 					FontSize(app.fs(12)).
 					TextColor(t.TextMuted)
 			} else {
-				ui.Badge(c, fmt.Sprintf("%d Discovered", info.Subdomains.TotalFound))
-				ui.Badge(c, fmt.Sprintf("%d Active (DNS)", info.Subdomains.ActiveCount))
+				app.renderStatusPill(c, t, fmt.Sprintf("%d Discovered", info.Subdomains.TotalFound), toneInfo)
+				app.renderStatusPill(c, t, fmt.Sprintf("%d Active (DNS)", info.Subdomains.ActiveCount), toneSuccess)
 				if len(info.Subdomains.SourcesUsed) > 0 {
-					ui.Badge(c, "Sources: "+strings.Join(info.Subdomains.SourcesUsed, ", "))
+					app.renderStatusPill(c, t, "Sources: "+strings.Join(info.Subdomains.SourcesUsed, ", "), toneNeutral)
 				}
 			}
 
@@ -2422,13 +2547,13 @@ func (app *DesktopApp) renderSubdomainEnumerationCard(c *ui.Context, t *ui.Theme
 						ui.Text(c, subItem.Subdomain).FontSize(app.fs(13)).Bold().Selectable()
 
 						if subItem.Active {
-							ui.Badge(c, "ACTIVE")
+							app.renderStatusPill(c, t, "ACTIVE", toneSuccess)
 						} else {
-							ui.Badge(c, "HISTORICAL (CT)")
+							app.renderStatusPill(c, t, "HISTORICAL (CT)", toneWarning)
 						}
 
 						if len(subItem.Sources) > 0 {
-							ui.Badge(c, strings.Join(subItem.Sources, "+"))
+							app.renderStatusPill(c, t, strings.Join(subItem.Sources, "+"), toneInfo)
 						}
 
 						if len(subItem.IPAddresses) > 0 {
@@ -2487,14 +2612,22 @@ func (app *DesktopApp) renderPingAndTracerouteCards(c *ui.Context, t *ui.Theme, 
 					TextColor(t.TextMuted)
 			} else {
 				statusLabel := "Unreachable"
+				reachTone := toneDanger
 				if ping.Reachable {
 					statusLabel = "Reachable"
+					reachTone = toneSuccess
 				}
-				ui.Badge(c, statusLabel)
+				app.renderStatusPill(c, t, statusLabel, reachTone)
 				if ping.Method != "" {
-					ui.Badge(c, ping.Method)
+					app.renderStatusPill(c, t, ping.Method, toneInfo)
 				}
-				ui.Badge(c, fmt.Sprintf("%.0f%% Loss (%d/%d)", ping.LossPercent, ping.PacketsRecv, ping.PacketsSent))
+				lossTone := toneSuccess
+				if ping.LossPercent >= 100 || !ping.Reachable {
+					lossTone = toneDanger
+				} else if ping.LossPercent > 0 {
+					lossTone = toneWarning
+				}
+				app.renderStatusPill(c, t, fmt.Sprintf("%.0f%% Loss (%d/%d)", ping.LossPercent, ping.PacketsRecv, ping.PacketsSent), lossTone)
 			}
 		})
 
@@ -2511,7 +2644,11 @@ func (app *DesktopApp) renderPingAndTracerouteCards(c *ui.Context, t *ui.Theme, 
 					for _, pr := range ping.Probes {
 						probe := pr
 						label := fmt.Sprintf("#%d: %s", probe.Seq, probe.Detail)
-						ui.Badge(c, label)
+						probeTone := toneSuccess
+						if !probe.Success {
+							probeTone = toneDanger
+						}
+						app.renderStatusPill(c, t, label, probeTone)
 					}
 				})
 			}
@@ -2535,11 +2672,11 @@ func (app *DesktopApp) renderPingAndTracerouteCards(c *ui.Context, t *ui.Theme, 
 					TextColor(t.TextMuted)
 			} else {
 				if trace.Method != "" {
-					ui.Badge(c, trace.Method)
+					app.renderStatusPill(c, t, trace.Method, toneInfo)
 				}
-				ui.Badge(c, fmt.Sprintf("%d Hops", len(trace.Hops)))
+				app.renderStatusPill(c, t, fmt.Sprintf("%d Hops", len(trace.Hops)), toneNeutral)
 				if trace.Completed {
-					ui.Badge(c, "Reached Target")
+					app.renderStatusPill(c, t, "Reached Target", toneSuccess)
 				}
 			}
 		})
@@ -2554,7 +2691,7 @@ func (app *DesktopApp) renderPingAndTracerouteCards(c *ui.Context, t *ui.Theme, 
 					hop := h
 					ui.Box(c).Key(fmt.Sprintf("hop:%d:%s", hop.Hop, hop.IP)).FillWidth().Padding(8).Radius(6).Border(1, t.Border).Children(func() {
 						ui.Row(c).FillWidth().Gap(10).AlignItems(ui.Center).Wrap().Children(func() {
-							ui.Badge(c, fmt.Sprintf("#%d", hop.Hop))
+							app.renderStatusPill(c, t, fmt.Sprintf("#%d", hop.Hop), toneNeutral)
 							if hop.Timeout || (hop.IP == "" && hop.Host == "") {
 								ui.Text(c, "* * * (Request Timed Out)").FontSize(app.fs(12)).TextColor(t.TextMuted)
 							} else {
@@ -2565,7 +2702,7 @@ func (app *DesktopApp) renderPingAndTracerouteCards(c *ui.Context, t *ui.Theme, 
 									ui.Text(c, fmt.Sprintf("(%s)", hop.Host)).FontSize(app.fs(12)).TextColor(t.TextMuted).Selectable()
 								}
 								if hop.RTT != "" {
-									ui.Badge(c, hop.RTT)
+									app.renderStatusPill(c, t, hop.RTT, toneInfo)
 								}
 								ui.Spacer(c)
 								if hop.IP != "" && hop.IP != target && analyzer.IsPublicRoutableIP(hop.IP) {
@@ -2598,14 +2735,18 @@ func (app *DesktopApp) renderReputationCard(c *ui.Context, t *ui.Theme, scanID i
 					FontSize(app.fs(12)).
 					TextColor(t.TextMuted)
 			} else {
-				ui.Badge(c, rep.Status)
+				repTone := toneSuccess
+				if rep.ListedCount > 0 {
+					repTone = toneDanger
+				}
+				app.renderStatusPill(c, t, rep.Status, repTone)
 				if rep.ListedCount == 0 {
-					ui.Badge(c, "All Clean")
+					app.renderStatusPill(c, t, "All Clean", toneSuccess)
 				} else {
-					ui.Badge(c, fmt.Sprintf("%d Listed", rep.ListedCount))
+					app.renderStatusPill(c, t, fmt.Sprintf("%d Listed", rep.ListedCount), toneDanger)
 				}
 				if rep.ResolvedIP != "" && !isIP {
-					ui.Badge(c, "Checked IP: "+rep.ResolvedIP)
+					app.renderStatusPill(c, t, "Checked IP: "+rep.ResolvedIP, toneInfo)
 				}
 			}
 		})
@@ -2633,15 +2774,17 @@ func (app *DesktopApp) renderReputationCard(c *ui.Context, t *ui.Theme, scanID i
 				entry := e
 				borderCol := t.Border
 				statusBadge := "CLEAN"
+				entryTone := toneSuccess
 				if entry.Listed {
 					borderCol = t.Danger
 					statusBadge = "LISTED"
+					entryTone = toneDanger
 				}
 				ui.Box(c).Key("dnsbl:"+entry.Zone+":"+entry.Target).PaddingX(8).PaddingY(6).Radius(6).Border(1, borderCol).Children(func() {
 					ui.Column(c).Gap(3).Children(func() {
 						ui.Row(c).Gap(6).AlignItems(ui.Center).Children(func() {
 							ui.Text(c, entry.Provider).FontSize(app.fs(12)).Bold()
-							ui.Badge(c, statusBadge)
+							app.renderStatusPill(c, t, statusBadge, entryTone)
 						})
 						ui.Text(c, fmt.Sprintf("%s (%s)", entry.Zone, entry.Category)).FontSize(app.fs(10)).TextColor(t.TextMuted)
 						if entry.Listed && entry.Reason != "" {
@@ -2672,21 +2815,25 @@ func (app *DesktopApp) renderZoneAuditCard(c *ui.Context, t *ui.Theme, scanID in
 					FontSize(app.fs(12)).
 					TextColor(t.TextMuted)
 			} else {
-				ui.Badge(c, "DNSSEC: "+za.DNSSECStatus)
+				dnssecTone := toneWarning
+				if za.DNSSECEnabled {
+					dnssecTone = toneSuccess
+				}
+				app.renderStatusPill(c, t, "DNSSEC: "+za.DNSSECStatus, dnssecTone)
 				if za.HasIPv6 {
-					ui.Badge(c, fmt.Sprintf("IPv6 (AAAA): %d IPs", len(za.IPv6Addresses)+len(za.WWWIPv6Addresses)))
+					app.renderStatusPill(c, t, fmt.Sprintf("IPv6 (AAAA): %d IPs", len(za.IPv6Addresses)+len(za.WWWIPv6Addresses)), toneSuccess)
 				} else {
-					ui.Badge(c, "IPv6 (AAAA): None")
+					app.renderStatusPill(c, t, "IPv6 (AAAA): None", toneWarning)
 				}
 				if za.AXFRChecked {
 					if za.AXFRVulnerable {
-						ui.Badge(c, "AXFR: VULNERABLE")
+						app.renderStatusPill(c, t, "AXFR: VULNERABLE", toneDanger)
 					} else {
-						ui.Badge(c, "AXFR: Refused (Secure)")
+						app.renderStatusPill(c, t, "AXFR: Refused (Secure)", toneSuccess)
 					}
 				}
 				if za.SOA != nil && za.SOA.Serial > 0 {
-					ui.Badge(c, fmt.Sprintf("SOA Serial: %d", za.SOA.Serial))
+					app.renderStatusPill(c, t, fmt.Sprintf("SOA Serial: %d", za.SOA.Serial), toneInfo)
 				}
 			}
 		})
@@ -2701,9 +2848,9 @@ func (app *DesktopApp) renderZoneAuditCard(c *ui.Context, t *ui.Theme, scanID in
 				ui.Row(c).FillWidth().Gap(8).AlignItems(ui.Center).Wrap().Children(func() {
 					ui.Text(c, "IPv6 (AAAA) Dual-Stack Parity").FontSize(app.fs(13)).Bold()
 					if za.HasIPv6 {
-						ui.Badge(c, "DUAL-STACK (IPv4 + IPv6)")
+						app.renderStatusPill(c, t, "DUAL-STACK (IPv4 + IPv6)", toneSuccess)
 					} else {
-						ui.Badge(c, "IPv4 ONLY")
+						app.renderStatusPill(c, t, "IPv4 ONLY", toneWarning)
 					}
 				})
 
@@ -2725,12 +2872,16 @@ func (app *DesktopApp) renderZoneAuditCard(c *ui.Context, t *ui.Theme, scanID in
 			ui.Column(c).FillWidth().Gap(6).Children(func() {
 				ui.Row(c).FillWidth().Gap(8).AlignItems(ui.Center).Wrap().Children(func() {
 					ui.Text(c, "DNSSEC Chain of Trust (DS, DNSKEY, RRSIG)").FontSize(app.fs(13)).Bold()
-					ui.Badge(c, za.DNSSECStatus)
+					dnssecPillTone := toneWarning
+					if za.DNSSECEnabled {
+						dnssecPillTone = toneSuccess
+					}
+					app.renderStatusPill(c, t, za.DNSSECStatus, dnssecPillTone)
 					if za.DNSSECValidated {
-						ui.Badge(c, "AD Bit Validated")
+						app.renderStatusPill(c, t, "AD Bit Validated", toneSuccess)
 					}
 					if za.RRSIGCount > 0 {
-						ui.Badge(c, fmt.Sprintf("%d RRSIGs", za.RRSIGCount))
+						app.renderStatusPill(c, t, fmt.Sprintf("%d RRSIGs", za.RRSIGCount), toneInfo)
 					}
 				})
 
@@ -2743,9 +2894,9 @@ func (app *DesktopApp) renderZoneAuditCard(c *ui.Context, t *ui.Theme, scanID in
 					for _, d := range za.DSRecords {
 						ds := d
 						ui.Row(c).Key(fmt.Sprintf("ds:%d:%s", ds.KeyTag, ds.Digest)).FillWidth().Gap(8).AlignItems(ui.Center).Wrap().Children(func() {
-							ui.Badge(c, fmt.Sprintf("KeyTag: %d", ds.KeyTag))
-							ui.Badge(c, ds.AlgoName)
-							ui.Badge(c, ds.DigestName)
+							app.renderStatusPill(c, t, fmt.Sprintf("KeyTag: %d", ds.KeyTag), toneInfo)
+							app.renderStatusPill(c, t, ds.AlgoName, toneNeutral)
+							app.renderStatusPill(c, t, ds.DigestName, toneNeutral)
 							ui.Text(c, ds.Digest).FontSize(app.fs(11)).TextColor(t.TextMuted).Selectable()
 						})
 					}
@@ -2756,9 +2907,9 @@ func (app *DesktopApp) renderZoneAuditCard(c *ui.Context, t *ui.Theme, scanID in
 					for _, k := range za.DNSKEYRecords {
 						keyRec := k
 						ui.Row(c).Key(fmt.Sprintf("dnskey:%d:%d", keyRec.KeyTag, keyRec.Flags)).FillWidth().Gap(8).AlignItems(ui.Center).Wrap().Children(func() {
-							ui.Badge(c, keyRec.Role)
-							ui.Badge(c, fmt.Sprintf("KeyTag: %d", keyRec.KeyTag))
-							ui.Badge(c, keyRec.AlgoName)
+							app.renderStatusPill(c, t, keyRec.Role, toneSuccess)
+							app.renderStatusPill(c, t, fmt.Sprintf("KeyTag: %d", keyRec.KeyTag), toneInfo)
+							app.renderStatusPill(c, t, keyRec.AlgoName, toneNeutral)
 							if keyRec.PublicKey != "" {
 								ui.Text(c, keyRec.PublicKey).FontSize(app.fs(11)).TextColor(t.TextMuted).Selectable()
 							}
@@ -2774,7 +2925,7 @@ func (app *DesktopApp) renderZoneAuditCard(c *ui.Context, t *ui.Theme, scanID in
 				ui.Column(c).FillWidth().Gap(6).Children(func() {
 					ui.Row(c).FillWidth().Gap(8).AlignItems(ui.Center).Wrap().Children(func() {
 						ui.Text(c, "Start of Authority (SOA) & Zone Timers").FontSize(app.fs(13)).Bold()
-						ui.Badge(c, fmt.Sprintf("Serial: %d", za.SOA.Serial))
+						app.renderStatusPill(c, t, fmt.Sprintf("Serial: %d", za.SOA.Serial), toneInfo)
 					})
 
 					if za.SOA.PrimaryNS != "" {
@@ -2801,9 +2952,9 @@ func (app *DesktopApp) renderZoneAuditCard(c *ui.Context, t *ui.Theme, scanID in
 					ui.Row(c).FillWidth().Gap(8).AlignItems(ui.Center).Wrap().Children(func() {
 						ui.Text(c, "Authoritative Zone Transfer (AXFR) Security Check").FontSize(app.fs(13)).Bold()
 						if za.AXFRVulnerable {
-							ui.Badge(c, "VULNERABLE (OPEN AXFR)")
+							app.renderStatusPill(c, t, "VULNERABLE (OPEN AXFR)", toneDanger)
 						} else {
-							ui.Badge(c, "SECURE (AXFR REFUSED)")
+							app.renderStatusPill(c, t, "SECURE (AXFR REFUSED)", toneSuccess)
 						}
 					})
 
@@ -2813,9 +2964,13 @@ func (app *DesktopApp) renderZoneAuditCard(c *ui.Context, t *ui.Theme, scanID in
 
 					for _, ar := range za.AXFRResults {
 						axfrItem := ar
+						axfrTone := toneSuccess
+						if axfrItem.Vulnerable {
+							axfrTone = toneDanger
+						}
 						ui.Row(c).Key("axfr:" + axfrItem.Nameserver).FillWidth().Gap(8).AlignItems(ui.Center).Wrap().Children(func() {
 							ui.Text(c, axfrItem.Nameserver).FontSize(app.fs(12)).Bold().Selectable()
-							ui.Badge(c, axfrItem.Status)
+							app.renderStatusPill(c, t, axfrItem.Status, axfrTone)
 						})
 					}
 				})
@@ -2840,7 +2995,11 @@ func (app *DesktopApp) renderWebCVESection(c *ui.Context, t *ui.Theme, scanID in
 				FontSize(app.fs(12)).
 				TextColor(t.TextMuted)
 		} else {
-			ui.Badge(c, fmt.Sprintf("%d CVEs Found", len(vulns)))
+			cveCountTone := toneSuccess
+			if len(vulns) > 0 {
+				cveCountTone = toneDanger
+			}
+			app.renderStatusPill(c, t, fmt.Sprintf("%d CVEs Found", len(vulns)), cveCountTone)
 			if len(vulns) == 0 {
 				ui.Text(c, "No known CVEs found for detected technology versions.").
 					FontSize(app.fs(12)).
@@ -2855,7 +3014,7 @@ func (app *DesktopApp) renderWebCVESection(c *ui.Context, t *ui.Theme, scanID in
 			ui.Column(c).FillWidth().Gap(4).Children(func() {
 				ui.Row(c).FillWidth().Gap(8).AlignItems(ui.Center).Children(func() {
 					ui.Text(c, vuln.ID).Bold()
-					ui.Badge(c, vuln.Severity)
+					app.renderStatusPill(c, t, vuln.Severity, cveSeverityTone(vuln.Severity))
 					ui.Spacer(c)
 					if vuln.URL != "" {
 						ui.Link(c, "NVD Advisory ↗", vuln.URL)
@@ -2885,34 +3044,42 @@ func (app *DesktopApp) renderEmailAuthCard(c *ui.Context, t *ui.Theme, scanID in
 			}
 
 			if email.SPFRecord != nil {
-				ui.Badge(c, "SPF: "+email.SPFRecord.Status)
+				app.renderStatusPill(c, t, "SPF: "+email.SPFRecord.Status, emailAuthStatusTone(email.SPFRecord.Status))
 			} else {
-				ui.Badge(c, "SPF: Missing")
+				app.renderStatusPill(c, t, "SPF: Missing", toneDanger)
 			}
 
 			if email.DMARCRecord != nil {
-				ui.Badge(c, fmt.Sprintf("DMARC: %s (%s)", email.DMARCRecord.Policy, email.DMARCRecord.Status))
+				app.renderStatusPill(c, t, fmt.Sprintf("DMARC: %s (%s)", email.DMARCRecord.Policy, email.DMARCRecord.Status), emailAuthStatusTone(email.DMARCRecord.Status))
 			} else {
-				ui.Badge(c, "DMARC: Missing")
+				app.renderStatusPill(c, t, "DMARC: Missing", toneDanger)
 			}
 
-			ui.Badge(c, fmt.Sprintf("DKIM: %d Selectors", len(email.DKIMRecords)))
+			dkimTone := toneNeutral
+			if len(email.DKIMRecords) > 0 {
+				dkimTone = toneSuccess
+			}
+			app.renderStatusPill(c, t, fmt.Sprintf("DKIM: %d Selectors", len(email.DKIMRecords)), dkimTone)
 
 			if email.MTASTS != nil && email.MTASTS.Found {
 				mode := email.MTASTS.Mode
 				if mode == "" {
 					mode = "present"
 				}
-				ui.Badge(c, "MTA-STS: "+mode)
+				mtaTone := toneSuccess
+				if strings.EqualFold(mode, "testing") || strings.EqualFold(mode, "none") {
+					mtaTone = toneWarning
+				}
+				app.renderStatusPill(c, t, "MTA-STS: "+mode, mtaTone)
 			} else {
-				ui.Badge(c, "MTA-STS: None")
+				app.renderStatusPill(c, t, "MTA-STS: None", toneNeutral)
 			}
 
 			if email.TLSRPT != nil && email.TLSRPT.Found {
-				ui.Badge(c, "TLS-RPT: Present")
+				app.renderStatusPill(c, t, "TLS-RPT: Present", toneSuccess)
 			}
 			if email.BIMI != nil && email.BIMI.Found {
-				ui.Badge(c, "BIMI: Present")
+				app.renderStatusPill(c, t, "BIMI: Present", toneSuccess)
 			}
 		})
 
@@ -2961,9 +3128,9 @@ func (app *DesktopApp) renderEmailAuthCard(c *ui.Context, t *ui.Theme, scanID in
 				ui.Row(c).FillWidth().Gap(8).AlignItems(ui.Center).Wrap().Children(func() {
 					ui.Text(c, "DKIM Selectors (DomainKeys Identified Mail)").FontSize(app.fs(13)).Bold()
 					if len(email.DKIMRecords) > 0 {
-						ui.Badge(c, fmt.Sprintf("%d ACTIVE SELECTORS", len(email.DKIMRecords)))
+						app.renderStatusPill(c, t, fmt.Sprintf("%d ACTIVE SELECTORS", len(email.DKIMRecords)), toneSuccess)
 					} else {
-						ui.Badge(c, "NONE DISCOVERED")
+						app.renderStatusPill(c, t, "NONE DISCOVERED", toneNeutral)
 					}
 				})
 
@@ -2977,9 +3144,9 @@ func (app *DesktopApp) renderEmailAuthCard(c *ui.Context, t *ui.Theme, scanID in
 						ui.Box(c).Key("dkim:"+dkim.Selector).FillWidth().Padding(6).Radius(4).Border(1, t.Border).Children(func() {
 							ui.Column(c).FillWidth().Gap(4).Children(func() {
 								ui.Row(c).FillWidth().Gap(8).AlignItems(ui.Center).Wrap().Children(func() {
-									ui.Badge(c, dkim.Selector+"._domainkey."+apex)
+									app.renderStatusPill(c, t, dkim.Selector+"._domainkey."+apex, toneSuccess)
 									if dkim.KeyType != "" {
-										ui.Badge(c, "Key: "+strings.ToUpper(dkim.KeyType))
+										app.renderStatusPill(c, t, "Key: "+strings.ToUpper(dkim.KeyType), toneInfo)
 									}
 									if dkim.CNAME != "" {
 										ui.Text(c, "CNAME → "+dkim.CNAME).FontSize(app.fs(12)).TextColor(t.TextMuted).Selectable()
@@ -3001,17 +3168,21 @@ func (app *DesktopApp) renderEmailAuthCard(c *ui.Context, t *ui.Theme, scanID in
 				ui.Row(c).FillWidth().Gap(8).AlignItems(ui.Center).Wrap().Children(func() {
 					ui.Text(c, "MTA-STS (RFC 8461) & SMTP TLS Reporting (RFC 8460)").FontSize(app.fs(13)).Bold()
 					if email.MTASTS != nil && email.MTASTS.Found {
-						ui.Badge(c, "MTA-STS: PRESENT")
+						app.renderStatusPill(c, t, "MTA-STS: PRESENT", toneSuccess)
 						if email.MTASTS.Mode != "" {
-							ui.Badge(c, "Mode: "+strings.ToUpper(email.MTASTS.Mode))
+							modeTone := toneSuccess
+							if strings.EqualFold(email.MTASTS.Mode, "testing") || strings.EqualFold(email.MTASTS.Mode, "none") {
+								modeTone = toneWarning
+							}
+							app.renderStatusPill(c, t, "Mode: "+strings.ToUpper(email.MTASTS.Mode), modeTone)
 						}
 					} else {
-						ui.Badge(c, "MTA-STS: MISSING")
+						app.renderStatusPill(c, t, "MTA-STS: MISSING", toneNeutral)
 					}
 					if email.TLSRPT != nil && email.TLSRPT.Found {
-						ui.Badge(c, "TLS-RPT: PRESENT")
+						app.renderStatusPill(c, t, "TLS-RPT: PRESENT", toneSuccess)
 					} else {
-						ui.Badge(c, "TLS-RPT: MISSING")
+						app.renderStatusPill(c, t, "TLS-RPT: MISSING", toneNeutral)
 					}
 					ui.Spacer(c)
 					if email.MTASTS != nil && email.MTASTS.PolicyURL != "" {
@@ -3055,9 +3226,9 @@ func (app *DesktopApp) renderEmailAuthCard(c *ui.Context, t *ui.Theme, scanID in
 				ui.Row(c).FillWidth().Gap(8).AlignItems(ui.Center).Wrap().Children(func() {
 					ui.Text(c, "BIMI (Brand Indicators for Message Identification)").FontSize(app.fs(13)).Bold()
 					if email.BIMI != nil && email.BIMI.Found {
-						ui.Badge(c, "PRESENT")
+						app.renderStatusPill(c, t, "PRESENT", toneSuccess)
 					} else {
-						ui.Badge(c, "NOT CONFIGURED")
+						app.renderStatusPill(c, t, "NOT CONFIGURED", toneNeutral)
 					}
 					ui.Spacer(c)
 					if email.BIMI != nil && email.BIMI.LogoURL != "" {
@@ -3121,10 +3292,10 @@ func (app *DesktopApp) renderChildScansTab(c *ui.Context, t *ui.Theme) {
 			ch := child
 			ui.Row(c).Key(ch.ID).FillWidth().Gap(8).AlignItems(ui.Center).Children(func() {
 				app.renderFavicon(c, ch.ID, ch.Favicon, 16)
-				ui.Badge(c, string(ch.TargetType))
+				app.renderStatusPill(c, t, string(ch.TargetType), toneInfo)
 				ui.Text(c, ch.Target).Bold()
 				if ch.PivotReason != "" {
-					ui.Badge(c, "via "+ch.PivotReason)
+					app.renderStatusPill(c, t, "via "+ch.PivotReason, toneNeutral)
 				}
 				ui.Text(c, ch.Summary).FontSize(app.fs(12)).TextColor(t.TextMuted)
 				ui.Spacer(c)
