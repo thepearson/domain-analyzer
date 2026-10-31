@@ -2016,14 +2016,7 @@ func (app *DesktopApp) renderDomainDetails(c *ui.Context, t *ui.Theme, scanID in
 		app.renderSectionCard(c, t, "Web Technologies & Security Headers", func() {
 			app.renderTechStackList(c, t, info.Web)
 			app.renderWebCVESection(c, t, scanID, info.VulnsChecked, info.Vulnerabilities)
-
-			orderedHeaders := sortedSecurityHeaders(info.Web.SecurityHeaders)
-			if len(orderedHeaders) > 0 {
-				ui.Text(c, "HTTP Security Headers:").FontSize(app.fs(12)).TextColor(t.TextMuted)
-				for _, kv := range orderedHeaders {
-					app.renderKeyValue(c, t, kv.Key, kv.Value)
-				}
-			}
+			app.renderSecurityHeadersGrid(c, t, scanID, info.Web.SecurityHeaders)
 		})
 
 		// 4. HTTP Redirect Chain & Performance Timing Waterfall
@@ -2095,11 +2088,7 @@ func (app *DesktopApp) renderIPDetails(c *ui.Context, t *ui.Theme, scanID int64,
 
 			app.renderTechStackList(c, t, info.Web)
 			app.renderWebCVESection(c, t, scanID, info.VulnsChecked, info.Vulnerabilities)
-
-			orderedHeaders := sortedSecurityHeaders(info.Web.SecurityHeaders)
-			for _, kv := range orderedHeaders {
-				app.renderKeyValue(c, t, kv.Key, kv.Value)
-			}
+			app.renderSecurityHeadersGrid(c, t, scanID, info.Web.SecurityHeaders)
 		})
 
 		// 3. HTTP Redirect Chain & Performance Timing Waterfall
@@ -2165,6 +2154,88 @@ func (app *DesktopApp) renderIPDetails(c *ui.Context, t *ui.Theme, scanID int64,
 	}
 }
 
+func (app *DesktopApp) renderSecurityHeadersGrid(c *ui.Context, t *ui.Theme, scanID int64, headers map[string]string) {
+	if len(headers) == 0 {
+		return
+	}
+	merged := make(map[string]string, len(canonicalSecurityHeaderOrder)+len(headers))
+	for _, k := range canonicalSecurityHeaderOrder {
+		merged[k] = "Missing"
+	}
+	for k, v := range headers {
+		merged[k] = v
+	}
+	orderedHeaders := sortedSecurityHeaders(merged)
+
+	presentCount := 0
+	for _, kv := range orderedHeaders {
+		val := strings.TrimSpace(kv.Value)
+		if val != "" && !strings.EqualFold(val, "Missing") {
+			presentCount++
+		}
+	}
+
+	summaryTone := toneDanger
+	if presentCount >= 5 {
+		summaryTone = toneSuccess
+	} else if presentCount >= 2 {
+		summaryTone = toneWarning
+	}
+
+	ui.Column(c).FillWidth().Gap(6).Children(func() {
+		ui.Row(c).FillWidth().Gap(8).AlignItems(ui.Center).Wrap().Children(func() {
+			ui.Text(c, "HTTP Security Headers Checklist").FontSize(app.fs(13)).Bold()
+			app.renderStatusPill(c, t, fmt.Sprintf("%d/%d Configured", presentCount, len(orderedHeaders)), summaryTone)
+		})
+
+		ui.Row(c).FillWidth().Gap(8).AlignItems(ui.Center).Wrap().Children(func() {
+			for _, kv := range orderedHeaders {
+				hdr := kv
+				val := strings.TrimSpace(hdr.Value)
+				isPresent := val != "" && !strings.EqualFold(val, "Missing")
+
+				pillTone := toneWarning
+				pillText := "MISSING"
+				borderCol := t.Border
+				if isPresent {
+					pillTone = toneSuccess
+					pillText = "PRESENT"
+					borderCol = t.Success
+				} else if hdr.Key == "Strict-Transport-Security" || hdr.Key == "Content-Security-Policy" {
+					pillTone = toneDanger
+				}
+
+				ui.Box(c).
+					Key(fmt.Sprintf("sechdr:%d:%s", scanID, hdr.Key)).
+					Grow(1).
+					MinWidth(270).
+					Padding(8).
+					Radius(6).
+					Background(t.Background).
+					Border(1, borderCol).
+					BorderStartWidth(3).
+					Children(func() {
+						ui.Column(c).FillWidth().Gap(4).Children(func() {
+							ui.Row(c).FillWidth().Gap(6).AlignItems(ui.Center).Children(func() {
+								ui.Text(c, hdr.Key).FontSize(app.fs(12)).Bold()
+								ui.Spacer(c)
+								app.renderStatusPill(c, t, pillText, pillTone)
+							})
+							if !isPresent {
+								ui.Text(c, "Not set in HTTP response").FontSize(app.fs(11)).TextColor(t.TextMuted)
+							} else if len(val) <= 68 {
+								ui.Text(c, val).Font("monospace").FontSize(app.fs(11)).TextColor(t.Text).Selectable()
+							} else {
+								ui.Text(c, val).Font("monospace").FontSize(app.fs(11)).TextColor(t.TextMuted).MaxLines(1).Ellipsis("...")
+								app.renderCollapsibleRawRecord(c, t, fmt.Sprintf("sechdr-raw:%d:%s", scanID, hdr.Key), hdr.Key, val)
+							}
+						})
+					})
+			}
+		})
+	})
+}
+
 func (app *DesktopApp) renderHTTPTraceCard(c *ui.Context, t *ui.Theme, scanID int64, target string, trace *analyzer.HTTPTraceResult) {
 	app.renderSectionCard(c, t, "HTTP Redirect Chain & Performance Timing Waterfall", func() {
 		ui.Row(c).FillWidth().Gap(10).AlignItems(ui.Center).Wrap().Children(func() {
@@ -2201,10 +2272,10 @@ func (app *DesktopApp) renderHTTPTraceCard(c *ui.Context, t *ui.Theme, scanID in
 			return
 		}
 
-		// 1. Performance Timing Waterfall Breakdown
+		// 1. Performance Timing Waterfall Breakdown (Visual Horizontal Bars)
 		wf := trace.Waterfall
 		if wf.StatusCode > 0 {
-			ui.Box(c).FillWidth().Padding(8).Radius(6).Border(1, t.Border).Children(func() {
+			ui.Box(c).FillWidth().Padding(10).Radius(6).Border(1, t.Border).Children(func() {
 				ui.Column(c).FillWidth().Gap(6).Children(func() {
 					ui.Row(c).FillWidth().Gap(8).AlignItems(ui.Center).Wrap().Children(func() {
 						ui.Text(c, "Performance Timing Waterfall").FontSize(app.fs(13)).Bold()
@@ -2212,20 +2283,61 @@ func (app *DesktopApp) renderHTTPTraceCard(c *ui.Context, t *ui.Theme, scanID in
 							app.renderStatusPill(c, t, wf.Protocol, toneInfo)
 						}
 						app.renderStatusPill(c, t, fmt.Sprintf("HTTP %d", wf.StatusCode), httpStatusTone(wf.StatusCode))
+						app.renderStatusPill(c, t, fmt.Sprintf("Total: %.2f ms", wf.TotalMs), toneSuccess)
 						ui.Spacer(c)
 						if wf.URL != "" {
 							ui.Link(c, wf.URL+" ↗", wf.URL)
 						}
 					})
 
-					ui.Row(c).FillWidth().Gap(8).AlignItems(ui.Center).Wrap().Children(func() {
-						app.renderStatusPill(c, t, fmt.Sprintf("DNS Lookup: %.2f ms", wf.DNSMs), toneInfo)
-						app.renderStatusPill(c, t, fmt.Sprintf("TCP Connect: %.2f ms", wf.TCPConnectMs), toneInfo)
-						app.renderStatusPill(c, t, fmt.Sprintf("TLS Handshake: %.2f ms", wf.TLSHandshakeMs), toneInfo)
-						app.renderStatusPill(c, t, fmt.Sprintf("TTFB: %.2f ms", wf.TTFBMs), toneInfo)
-						app.renderStatusPill(c, t, fmt.Sprintf("Transfer: %.2f ms", wf.ContentTransferMs), toneInfo)
-						app.renderStatusPill(c, t, fmt.Sprintf("Total: %.2f ms", wf.TotalMs), toneSuccess)
-					})
+					type wfPhase struct {
+						Label string
+						Ms    float64
+						Color ui.Color
+					}
+					phases := []wfPhase{
+						{Label: "DNS Lookup", Ms: wf.DNSMs, Color: ui.RGB(59, 130, 246)},
+						{Label: "TCP Connect", Ms: wf.TCPConnectMs, Color: ui.RGB(245, 158, 11)},
+						{Label: "TLS Handshake", Ms: wf.TLSHandshakeMs, Color: ui.RGB(168, 85, 247)},
+						{Label: "TTFB", Ms: wf.TTFBMs, Color: ui.RGB(34, 197, 94)},
+						{Label: "Transfer", Ms: wf.ContentTransferMs, Color: ui.RGB(6, 182, 212)},
+					}
+					totalDenom := wf.TotalMs
+					if totalDenom <= 0 {
+						for _, ph := range phases {
+							totalDenom += ph.Ms
+						}
+					}
+					if totalDenom <= 0 {
+						totalDenom = 1.0
+					}
+
+					for _, ph := range phases {
+						phase := ph
+						pct := (phase.Ms / totalDenom) * 100.0
+						if pct < 0 {
+							pct = 0
+						}
+						if pct > 100 {
+							pct = 100
+						}
+						barWidth := float32(pct * 2.8) // up to 280px proportional bar
+						if phase.Ms > 0 && barWidth < 6 {
+							barWidth = 6
+						}
+
+						ui.Row(c).Key("wfphase:" + phase.Label).FillWidth().Gap(10).AlignItems(ui.Center).Children(func() {
+							ui.Box(c).MinWidth(165).Children(func() {
+								app.renderStatusPill(c, t, fmt.Sprintf("%s: %.2f ms", phase.Label, phase.Ms), toneInfo)
+							})
+							ui.Box(c).Grow(1).Height(10).Radius(5).Background(t.Background).Border(1, t.Border).Children(func() {
+								if barWidth > 0 {
+									ui.Box(c).Width(barWidth).Height(8).Radius(4).Background(phase.Color)
+								}
+							})
+							ui.Text(c, fmt.Sprintf("%4.0f%%", pct)).Font("monospace").FontSize(app.fs(11)).TextColor(t.TextMuted).MinWidth(42)
+						})
+					}
 				})
 			})
 		}

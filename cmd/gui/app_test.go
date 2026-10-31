@@ -447,6 +447,9 @@ func TestDesktopAppDrillDownAndFeatures(t *testing.T) {
 	if !tester.HasText("Nginx (1.24.0) ↗") {
 		t.Errorf("expected UI to render clickable tech link 'Nginx (1.24.0) ↗'")
 	}
+	if !tester.HasText("HTTP Security Headers Checklist") || !tester.HasText("2/6 Configured") {
+		t.Errorf("expected HTTP Security Headers Checklist grid with '2/6 Configured' pill to be rendered")
+	}
 
 	// Switch back to "Summary & Reputation" sub-tab
 	if err := tester.Click("Summary & Reputation"); err != nil {
