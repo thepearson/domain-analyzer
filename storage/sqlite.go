@@ -781,3 +781,131 @@ func (s *Store) DeleteScan(id int64) error {
 	_, err := s.db.Exec(`DELETE FROM scans WHERE id = ?`, id)
 	return err
 }
+
+// SessionData represents a full exported reconnaissance session containing all scans and lineage trees.
+type SessionData struct {
+	Version    int           `json:"version"`
+	ExportedAt time.Time     `json:"exported_at"`
+	Scans      []SessionScan `json:"scans"`
+}
+
+// SessionScan represents an individual scan record within an exported session.
+type SessionScan struct {
+	ID           int64               `json:"id"`
+	Target       string              `json:"target"`
+	TargetType   analyzer.TargetType `json:"target_type"`
+	ParentScanID int64               `json:"parent_scan_id"`
+	PivotReason  string              `json:"pivot_reason"`
+	CheckVulns   bool                `json:"check_vulns"`
+	Summary      string              `json:"summary"`
+	Favicon      []byte              `json:"favicon,omitempty"`
+	PayloadJSON  string              `json:"payload_json"`
+	CreatedAt    string              `json:"created_at"`
+}
+
+// ExportSession serializes all scans in the store to a portable JSON byte slice.
+func (s *Store) ExportSession() ([]byte, error) {
+	rows, err := s.db.Query(
+		`SELECT id, target, target_type, parent_scan_id, pivot_reason, check_vulns, summary, favicon, payload_json, created_at
+		 FROM scans ORDER BY id ASC`,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("querying scans for export: %w", err)
+	}
+	defer rows.Close()
+
+	var session SessionData
+	session.Version = 1
+	session.ExportedAt = time.Now().UTC()
+
+	for rows.Next() {
+		var item SessionScan
+		var targetType string
+		var vulnsInt int
+		if err := rows.Scan(
+			&item.ID,
+			&item.Target,
+			&targetType,
+			&item.ParentScanID,
+			&item.PivotReason,
+			&vulnsInt,
+			&item.Summary,
+			&item.Favicon,
+			&item.PayloadJSON,
+			&item.CreatedAt,
+		); err != nil {
+			return nil, fmt.Errorf("scanning session row: %w", err)
+		}
+		item.TargetType = analyzer.TargetType(targetType)
+		item.CheckVulns = vulnsInt != 0
+		session.Scans = append(session.Scans, item)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+
+	return json.MarshalIndent(session, "", "  ")
+}
+
+// ExportSessionToFile exports all scans to a specified file path.
+func (s *Store) ExportSessionToFile(filePath string) error {
+	data, err := s.ExportSession()
+	if err != nil {
+		return err
+	}
+	dir := filepath.Dir(filePath)
+	if dir != "" && dir != "." {
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			return fmt.Errorf("creating directory for session export: %w", err)
+		}
+	}
+	return os.WriteFile(filePath, data, 0o644)
+}
+
+// ImportSession reads and deserializes session JSON data, importing scans while preserving parent-child trees and mapping IDs.
+func (s *Store) ImportSession(data []byte) (int, error) {
+	var session SessionData
+	if err := json.Unmarshal(data, &session); err != nil {
+		return 0, fmt.Errorf("unmarshaling session json: %w", err)
+	}
+
+	oldToNew := make(map[int64]int64)
+	importedCount := 0
+
+	for _, scan := range session.Scans {
+		parentID := int64(0)
+		if scan.ParentScanID > 0 {
+			if mapped, ok := oldToNew[scan.ParentScanID]; ok {
+				parentID = mapped
+			}
+		}
+
+		vulnsInt := 0
+		if scan.CheckVulns {
+			vulnsInt = 1
+		}
+
+		res, err := s.db.Exec(
+			`INSERT INTO scans (target, target_type, parent_scan_id, pivot_reason, check_vulns, summary, favicon, payload_json, created_at)
+			 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+			scan.Target, string(scan.TargetType), parentID, scan.PivotReason, vulnsInt, scan.Summary, scan.Favicon, scan.PayloadJSON, scan.CreatedAt,
+		)
+		if err != nil {
+			return importedCount, fmt.Errorf("importing scan %s: %w", scan.Target, err)
+		}
+		newID, _ := res.LastInsertId()
+		oldToNew[scan.ID] = newID
+		importedCount++
+	}
+
+	return importedCount, nil
+}
+
+// ImportSessionFromFile loads and imports scans from a JSON session file.
+func (s *Store) ImportSessionFromFile(filePath string) (int, error) {
+	data, err := os.ReadFile(filePath)
+	if err != nil {
+		return 0, fmt.Errorf("reading session file: %w", err)
+	}
+	return s.ImportSession(data)
+}

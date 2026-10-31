@@ -150,12 +150,14 @@ const (
 	DomainTabWebTLSWAF = 2 // WAF, TLS Grading, Web Tech/CVEs, HTTP Waterfall & Metadata
 	DomainTabEmail     = 3 // Email Deliverability (MX, SPF, DMARC, DKIM, MTA-STS, TLS-RPT, BIMI)
 	DomainTabNetwork   = 4 // Ping & Traceroute Network Diagnostics
+	DomainTabTargets   = 5 // Discovered Targets & Pivots
 )
 
 const (
 	IPTabSummary   = 0 // IP Ownership, Reverse DNS (PTR) & Reputation (DNSBL)
 	IPTabWebTLSWAF = 1 // TLS Grading, Direct HTTP/WAF/Tech/CVEs, HTTP Waterfall & Metadata
 	IPTabNetwork   = 2 // Port & Service Discovery, Ping & Traceroute
+	IPTabTargets   = 3 // Discovered Targets & Pivots
 )
 
 type DesktopApp struct {
@@ -169,10 +171,14 @@ type DesktopApp struct {
 	targetInput       string
 	checkVulns        bool
 	searchQuery       string
-	activeTab         int
 	domainCategoryTab int
 	ipCategoryTab     int
 	themeMode         int // 0: Auto (system), 1: Light, 2: Dark
+
+	sessionModalOpen  bool
+	sessionModalMode  int // 0: Save Session, 1: Open Session
+	sessionFilePath   string
+	sessionModalError string
 
 	scanning   bool
 	statusText string
@@ -183,8 +189,6 @@ type DesktopApp struct {
 	childScans       []storage.ScanSummary
 	scannedTargets   map[string]int64
 	rawJSONReadOnly  string
-	jsonSpansDark    []ui.Span
-	jsonSpansLight   []ui.Span
 	faviconCache     map[int64]cachedFavicon
 	techFaviconCache map[string]cachedFavicon
 	techFetching     map[string]bool
@@ -292,8 +296,6 @@ func (app *DesktopApp) SelectScan(id int64) {
 		app.currentPivots = nil
 		app.childScans = nil
 		app.rawJSONReadOnly = ""
-		app.jsonSpansDark = nil
-		app.jsonSpansLight = nil
 		return
 	}
 	rec, err := app.store.GetScan(id)
@@ -303,8 +305,6 @@ func (app *DesktopApp) SelectScan(id int64) {
 	}
 	app.currentScan = rec
 	app.rawJSONReadOnly = formatJSONPretty(rec.RawJSON)
-	app.jsonSpansDark = highlightJSON(app.rawJSONReadOnly, true)
-	app.jsonSpansLight = highlightJSON(app.rawJSONReadOnly, false)
 
 	if rec.TargetType == analyzer.TargetTypeIP {
 		app.currentPivots = analyzer.ExtractIPPivots(rec.IPInfo)
@@ -1071,6 +1071,9 @@ func (app *DesktopApp) View(c *ui.Context) {
 			app.renderDetailPane(c, t)
 		}).Grow(1).FillWidth()
 	})
+
+	// Session Import / Export Overlay Modal
+	app.renderSessionModal(c, t)
 }
 
 func (app *DesktopApp) renderTopBar(c *ui.Context, t *ui.Theme) {
@@ -1094,6 +1097,24 @@ func (app *DesktopApp) renderTopBar(c *ui.Context, t *ui.Theme) {
 		}
 		if app.statusText != "" {
 			ui.Text(c, app.statusText).FontSize(app.fs(12)).TextColor(t.TextMuted)
+		}
+
+		// Session File Management (Open Session / Save Session)
+		if ui.Button(c, "Open Session 📁").Tooltip("Load a saved reconnaissance session from file").Clicked() {
+			app.sessionModalOpen = true
+			app.sessionModalMode = 1
+			app.sessionModalError = ""
+			if app.sessionFilePath == "" {
+				app.sessionFilePath = "session.json"
+			}
+		}
+		if ui.Button(c, "Save Session 💾").Tooltip("Export current scan session to file").Clicked() {
+			app.sessionModalOpen = true
+			app.sessionModalMode = 0
+			app.sessionModalError = ""
+			if app.sessionFilePath == "" {
+				app.sessionFilePath = "session.json"
+			}
 		}
 
 		// Text Size Controls (A- / % / A+)
@@ -1120,6 +1141,119 @@ func (app *DesktopApp) renderTopBar(c *ui.Context, t *ui.Theme) {
 		if ui.Button(c, themeLabel).Tooltip("Toggle theme appearance (Auto / Light / Dark)").Clicked() {
 			app.themeMode = (app.themeMode + 1) % 3
 		}
+	})
+}
+
+func (app *DesktopApp) renderSessionModal(c *ui.Context, t *ui.Theme) {
+	if !app.sessionModalOpen {
+		return
+	}
+
+	ui.Overlay(c, func() {
+		ui.Box(c).Fill().Background(ui.RGBA(0, 0, 0, 0.55)).Center().Children(func() {
+			ui.Box(c).Width(480).Padding(20).Radius(10).Background(t.Surface).Border(1, t.Border).Children(func() {
+				ui.Column(c).FillWidth().Gap(14).Children(func() {
+					// Title & Close Button
+					ui.Row(c).FillWidth().AlignItems(ui.Center).Children(func() {
+						title := "Save Session to File"
+						if app.sessionModalMode == 1 {
+							title = "Open Session from File"
+						}
+						ui.Text(c, title).FontSize(app.fs(16)).Bold()
+						ui.Spacer(c)
+						if ui.Button(c, "✕").Tooltip("Close dialog").Clicked() {
+							app.sessionModalOpen = false
+							app.sessionModalError = ""
+						}
+					})
+
+					// Description
+					desc := "Export all saved scans, target trees, and reconnaissance history to a portable JSON session file."
+					if app.sessionModalMode == 1 {
+						desc = "Load and import scans from a previously exported session JSON file into your local database."
+					}
+					ui.Text(c, desc).FontSize(app.fs(12)).TextColor(t.TextMuted)
+
+					// File path input
+					ui.Column(c).FillWidth().Gap(4).Children(func() {
+						ui.Text(c, "Session File Path:").FontSize(app.fs(11)).Bold().TextColor(t.TextMuted)
+						inp := ui.TextInput(c, &app.sessionFilePath).
+							Placeholder("e.g. session.json or /path/to/session.json").
+							FillWidth()
+
+						if inp.Submitted() && strings.TrimSpace(app.sessionFilePath) != "" {
+							path := strings.TrimSpace(app.sessionFilePath)
+							if app.sessionModalMode == 0 {
+								if err := app.store.ExportSessionToFile(path); err != nil {
+									app.sessionModalError = fmt.Sprintf("Export error: %v", err)
+								} else {
+									app.sessionModalOpen = false
+									app.sessionModalError = ""
+									c.Toast("Session saved to " + path)
+								}
+							} else {
+								count, err := app.store.ImportSessionFromFile(path)
+								if err != nil {
+									app.sessionModalError = fmt.Sprintf("Import error: %v", err)
+								} else {
+									app.sessionModalOpen = false
+									app.sessionModalError = ""
+									app.RefreshHistory()
+									if len(app.scans) > 0 {
+										app.SelectScan(app.scans[0].ID)
+									}
+									c.Toast(fmt.Sprintf("Imported %d scans from %s", count, path))
+								}
+							}
+						}
+					})
+
+					if app.sessionModalError != "" {
+						app.renderStatusPill(c, t, app.sessionModalError, toneDanger)
+					}
+
+					// Action Buttons
+					ui.Row(c).FillWidth().Gap(8).AlignItems(ui.Center).Children(func() {
+						ui.Spacer(c)
+						if ui.Button(c, "Cancel").Clicked() {
+							app.sessionModalOpen = false
+							app.sessionModalError = ""
+						}
+
+						if app.sessionModalMode == 0 {
+							// Export / Save
+							if ui.PrimaryButton(c, "Save Session").Disabled(strings.TrimSpace(app.sessionFilePath) == "").Clicked() {
+								path := strings.TrimSpace(app.sessionFilePath)
+								if err := app.store.ExportSessionToFile(path); err != nil {
+									app.sessionModalError = fmt.Sprintf("Export error: %v", err)
+								} else {
+									app.sessionModalOpen = false
+									app.sessionModalError = ""
+									c.Toast("Session saved to " + path)
+								}
+							}
+						} else {
+							// Import / Open
+							if ui.PrimaryButton(c, "Open & Import").Disabled(strings.TrimSpace(app.sessionFilePath) == "").Clicked() {
+								path := strings.TrimSpace(app.sessionFilePath)
+								count, err := app.store.ImportSessionFromFile(path)
+								if err != nil {
+									app.sessionModalError = fmt.Sprintf("Import error: %v", err)
+								} else {
+									app.sessionModalOpen = false
+									app.sessionModalError = ""
+									app.RefreshHistory()
+									if len(app.scans) > 0 {
+										app.SelectScan(app.scans[0].ID)
+									}
+									c.Toast(fmt.Sprintf("Imported %d scans from %s", count, path))
+								}
+							}
+						}
+					})
+				})
+			})
+		})
 	})
 }
 
@@ -1306,56 +1440,19 @@ func (app *DesktopApp) renderDetailPane(c *ui.Context, t *ui.Theme) {
 			len(app.childScans),
 		)).FontSize(app.fs(12)).TextColor(t.TextMuted)
 
-		// At-a-Glance Executive Scorecard Tiles (click any tile to jump to its category sub-tab)
+		// Executive Scorecard Navigation Tiles (acts as the interactive category view switcher)
 		if scan.TargetType == analyzer.TargetTypeIP && scan.IPInfo != nil {
 			app.renderIPScorecard(c, t, scan.IPInfo)
 		} else if scan.DomainInfo != nil {
 			app.renderDomainScorecard(c, t, scan.DomainInfo)
 		}
 
-		// Navigation Tabs
-		tabLabels := []string{
-			"Overview & Details",
-			fmt.Sprintf("Discovered Targets (%d)", len(app.currentPivots)),
-			fmt.Sprintf("Child Scans (%d)", len(app.childScans)),
-			"Raw JSON",
-		}
-		ui.Tabs(c, &app.activeTab, tabLabels...)
-
-		// Categorized Sub-Tabs when viewing "Overview & Details"
-		if app.activeTab == 0 {
-			if scan.TargetType == analyzer.TargetTypeIP {
-				ui.Segmented(c, &app.ipCategoryTab,
-					"Summary & Reputation",
-					"Web, TLS & WAF",
-					"Ports & Network",
-				)
-			} else {
-				ui.Segmented(c, &app.domainCategoryTab,
-					"Summary & Reputation",
-					"DNS & Subdomains",
-					"Web, TLS & WAF",
-					"Email & Auth",
-					"Network & Ping",
-				)
-			}
-		}
-
 		ui.Scroll(c).Grow(1).FillWidth().Children(func() {
 			ui.Column(c).FillWidth().Gap(12).PaddingY(6).Children(func() {
-				switch app.activeTab {
-				case 0:
-					if scan.TargetType == analyzer.TargetTypeIP && scan.IPInfo != nil {
-						app.renderIPDetails(c, t, scan.ID, scan.IPInfo)
-					} else if scan.DomainInfo != nil {
-						app.renderDomainDetails(c, t, scan.ID, scan.DomainInfo)
-					}
-				case 1:
-					app.renderPivotsTab(c, t, scan.ID)
-				case 2:
-					app.renderChildScansTab(c, t)
-				case 3:
-					app.renderRawJSONTab(c, t)
+				if scan.TargetType == analyzer.TargetTypeIP && scan.IPInfo != nil {
+					app.renderIPDetails(c, t, scan.ID, scan.IPInfo)
+				} else if scan.DomainInfo != nil {
+					app.renderDomainDetails(c, t, scan.ID, scan.DomainInfo)
 				}
 			})
 		})
@@ -1586,8 +1683,12 @@ func (app *DesktopApp) renderScorecardTile(c *ui.Context, t *ui.Theme, key strin
 	borderCol := t.Border
 	bgCol := t.Surface
 	if isActive {
-		borderCol = accentCol
-		bgCol = t.SurfaceHover
+		borderCol = t.Accent
+		if t.Dark {
+			bgCol = ui.RGBA(59, 130, 246, 0.16)
+		} else {
+			bgCol = ui.RGBA(59, 130, 246, 0.09)
+		}
 	}
 
 	tile := ui.Box(c).
@@ -1604,7 +1705,13 @@ func (app *DesktopApp) renderScorecardTile(c *ui.Context, t *ui.Theme, key strin
 
 	tile.Children(func() {
 		ui.Column(c).FillWidth().Gap(3).Children(func() {
-			ui.Text(c, title).FontSize(app.fs(10)).Bold().TextColor(t.TextMuted)
+			ui.Row(c).FillWidth().AlignItems(ui.Center).Children(func() {
+				ui.Text(c, title).FontSize(app.fs(10)).Bold().TextColor(t.TextMuted)
+				if isActive {
+					ui.Spacer(c)
+					app.renderStatusPill(c, t, "ACTIVE", toneInfo)
+				}
+			})
 			ui.Text(c, headline).FontSize(app.fs(14)).Bold().TextColor(accentCol).MaxLines(1).Ellipsis("...")
 			ui.Text(c, subtitle).FontSize(app.fs(11)).TextColor(t.TextMuted).MaxLines(1).Ellipsis("...")
 		})
@@ -1746,29 +1853,28 @@ func (app *DesktopApp) renderDomainScorecard(c *ui.Context, t *ui.Theme, info *a
 
 	ui.Row(c).FillWidth().Gap(8).AlignItems(ui.Center).Wrap().Children(func() {
 		app.renderScorecardTile(c, t, "dom-summary", "REPUTATION & WHOIS", repHeadline, repSub, repTone,
-			app.activeTab == 0 && app.domainCategoryTab == DomainTabSummary, func() {
-				app.activeTab = 0
+			app.domainCategoryTab == DomainTabSummary, func() {
 				app.domainCategoryTab = DomainTabSummary
 			})
 		app.renderScorecardTile(c, t, "dom-dns", "DNS & ZONE", dnsHeadline, dnsSub, dnsTone,
-			app.activeTab == 0 && app.domainCategoryTab == DomainTabDNS, func() {
-				app.activeTab = 0
+			app.domainCategoryTab == DomainTabDNS, func() {
 				app.domainCategoryTab = DomainTabDNS
 			})
 		app.renderScorecardTile(c, t, "dom-web", "TLS, WAF & WEB", tlsHeadline, wafShort, tlsTone,
-			app.activeTab == 0 && app.domainCategoryTab == DomainTabWebTLSWAF, func() {
-				app.activeTab = 0
+			app.domainCategoryTab == DomainTabWebTLSWAF, func() {
 				app.domainCategoryTab = DomainTabWebTLSWAF
 			})
 		app.renderScorecardTile(c, t, "dom-email", "EMAIL SECURITY", emailHeadline, emailSub, emailTone,
-			app.activeTab == 0 && app.domainCategoryTab == DomainTabEmail, func() {
-				app.activeTab = 0
+			app.domainCategoryTab == DomainTabEmail, func() {
 				app.domainCategoryTab = DomainTabEmail
 			})
 		app.renderScorecardTile(c, t, "dom-net", "REACHABILITY", netHeadline, netSub, netTone,
-			app.activeTab == 0 && app.domainCategoryTab == DomainTabNetwork, func() {
-				app.activeTab = 0
+			app.domainCategoryTab == DomainTabNetwork, func() {
 				app.domainCategoryTab = DomainTabNetwork
+			})
+		app.renderScorecardTile(c, t, "dom-targets", "TARGETS DISCOVERED", fmt.Sprintf("%d Targets", len(app.currentPivots)), fmt.Sprintf("%d Child Scans", len(app.childScans)), toneInfo,
+			app.domainCategoryTab == DomainTabTargets, func() {
+				app.domainCategoryTab = DomainTabTargets
 			})
 	})
 }
@@ -1827,19 +1933,20 @@ func (app *DesktopApp) renderIPScorecard(c *ui.Context, t *ui.Theme, info *analy
 
 	ui.Row(c).FillWidth().Gap(8).AlignItems(ui.Center).Wrap().Children(func() {
 		app.renderScorecardTile(c, t, "ip-summary", "IP & REPUTATION", repHeadline, repSub, repTone,
-			app.activeTab == 0 && app.ipCategoryTab == IPTabSummary, func() {
-				app.activeTab = 0
+			app.ipCategoryTab == IPTabSummary, func() {
 				app.ipCategoryTab = IPTabSummary
 			})
 		app.renderScorecardTile(c, t, "ip-web", "TLS, WAF & HTTP", tlsHeadline, webSub, tlsTone,
-			app.activeTab == 0 && app.ipCategoryTab == IPTabWebTLSWAF, func() {
-				app.activeTab = 0
+			app.ipCategoryTab == IPTabWebTLSWAF, func() {
 				app.ipCategoryTab = IPTabWebTLSWAF
 			})
 		app.renderScorecardTile(c, t, "ip-net", "PORTS & PING", portHeadline, portSub, portTone,
-			app.activeTab == 0 && app.ipCategoryTab == IPTabNetwork, func() {
-				app.activeTab = 0
+			app.ipCategoryTab == IPTabNetwork, func() {
 				app.ipCategoryTab = IPTabNetwork
+			})
+		app.renderScorecardTile(c, t, "ip-targets", "TARGETS DISCOVERED", fmt.Sprintf("%d Targets", len(app.currentPivots)), fmt.Sprintf("%d Child Scans", len(app.childScans)), toneInfo,
+			app.ipCategoryTab == IPTabTargets, func() {
+				app.ipCategoryTab = IPTabTargets
 			})
 	})
 }
@@ -2105,6 +2212,10 @@ func (app *DesktopApp) renderDomainDetails(c *ui.Context, t *ui.Theme, scanID in
 	case DomainTabNetwork:
 		// Ping & Traceroute Network Diagnostics
 		app.renderPingAndTracerouteCards(c, t, scanID, info.Domain, info.Ping, info.Traceroute)
+
+	case DomainTabTargets:
+		// Discovered Targets & Pivots
+		app.renderPivotsTab(c, t, scanID)
 	}
 }
 
@@ -2226,6 +2337,10 @@ func (app *DesktopApp) renderIPDetails(c *ui.Context, t *ui.Theme, scanID int64,
 
 		// 2. Ping & Traceroute Network Diagnostics
 		app.renderPingAndTracerouteCards(c, t, scanID, info.IP, info.Ping, info.Traceroute)
+
+	case IPTabTargets:
+		// Discovered Targets & Pivots
+		app.renderPivotsTab(c, t, scanID)
 	}
 }
 
@@ -2879,7 +2994,6 @@ func (app *DesktopApp) renderSubdomainEnumerationCard(c *ui.Context, t *ui.Theme
 								if existingID, exists := app.scannedTargets[lookupKey]; exists && existingID != scanID {
 									if ui.Button(c, "Open Scan →").Clicked() {
 										app.SelectScan(existingID)
-										app.activeTab = 0
 									}
 									if ui.Button(c, "Re-scan ↻").Disabled(app.scanning).Clicked() {
 										app.StartScan(subItem.Subdomain, scanID, "Subdomain")
@@ -3645,193 +3759,10 @@ func (app *DesktopApp) renderPivotsTab(c *ui.Context, t *ui.Theme, scanID int64)
 	})
 }
 
-func (app *DesktopApp) renderChildScansTab(c *ui.Context, t *ui.Theme) {
-	if len(app.childScans) == 0 {
-		ui.Text(c, "No subsequent scans have been drilled down from this scan yet. Click 'Scan Domain ↗' or 'Scan IP ↗' on any discovered target to pivot.").
-			FontSize(app.fs(13)).
-			TextColor(t.TextMuted)
-		return
-	}
-
-	app.renderSectionCard(c, t, "Subsequent Scans Drilled Down From This Scan", func() {
-		ui.Column(c).FillWidth().Gap(6).Children(func() {
-			for _, child := range app.childScans {
-				ch := child
-				ui.Box(c).
-					Key(ch.ID).
-					FillWidth().
-					Padding(10).
-					Radius(6).
-					Background(t.Background).
-					Border(1, t.Border).
-					BorderStartWidth(3).
-					Children(func() {
-						ui.Row(c).FillWidth().Gap(8).AlignItems(ui.Center).Wrap().Children(func() {
-							app.renderFavicon(c, ch.ID, ch.Favicon, 16)
-							app.renderStatusPill(c, t, string(ch.TargetType), toneInfo)
-							ui.Text(c, ch.Target).Bold().FontSize(app.fs(13))
-							if ch.PivotReason != "" {
-								app.renderStatusPill(c, t, "via "+ch.PivotReason, toneNeutral)
-							}
-							if ch.Summary != "" {
-								ui.Text(c, ch.Summary).FontSize(app.fs(12)).TextColor(t.TextMuted)
-							}
-							ui.Spacer(c)
-							if ui.Button(c, "Open Scan →").Clicked() {
-								app.SelectScan(ch.ID)
-								app.activeTab = 0
-							}
-						})
-					})
-			}
-		})
-	})
-}
-
-func (app *DesktopApp) renderRawJSONTab(c *ui.Context, t *ui.Theme) {
-	ui.Box(c).FillWidth().Padding(12).Radius(8).Background(t.Surface).Border(1, t.Border).Children(func() {
-		ui.Column(c).FillWidth().Gap(8).Children(func() {
-			ui.Row(c).FillWidth().AlignItems(ui.Center).Children(func() {
-				ui.Text(c, "Formatted & Syntax-Highlighted JSON").FontSize(app.fs(14)).Bold()
-				ui.Spacer(c)
-				if ui.PrimaryButton(c, "Copy JSON to Clipboard").Clicked() {
-					c.WriteClipboard(app.rawJSONReadOnly)
-					c.Toast("Copied formatted JSON to clipboard")
-				}
-			})
-			ui.Divider(c)
-
-			spans := app.jsonSpansLight
-			if t.Dark {
-				spans = app.jsonSpansDark
-			}
-			ui.Box(c).FillWidth().Padding(12).Radius(6).Background(t.Background).Border(1, t.Border).Children(func() {
-				ui.RichText(c, spans...).Font("monospace").FontSize(app.fs(12)).Selectable().FillWidth()
-			})
-		})
-	})
-}
-
 func formatJSONPretty(raw string) string {
 	var buf bytes.Buffer
 	if err := json.Indent(&buf, []byte(raw), "", "  "); err == nil {
 		return buf.String()
 	}
 	return raw
-}
-
-// highlightJSON tokenizes pretty-printed JSON into syntax-highlighted ui.Span runs.
-func highlightJSON(src string, dark bool) []ui.Span {
-	var (
-		colKey   = ui.RGB(5, 80, 174)
-		colStr   = ui.RGB(17, 99, 41)
-		colNum   = ui.RGB(149, 56, 0)
-		colBool  = ui.RGB(130, 80, 223)
-		colPunct = ui.RGB(100, 110, 120)
-	)
-	if dark {
-		colKey = ui.RGB(121, 192, 255)
-		colStr = ui.RGB(126, 231, 135)
-		colNum = ui.RGB(255, 166, 87)
-		colBool = ui.RGB(210, 168, 255)
-		colPunct = ui.RGB(139, 148, 158)
-	}
-
-	var spans []ui.Span
-	n := len(src)
-	i := 0
-
-	for i < n {
-		ch := src[i]
-
-		// String token (either object key or string value)
-		if ch == '"' {
-			start := i
-			i++
-			for i < n {
-				if src[i] == '\\' {
-					i += 2
-					continue
-				}
-				if src[i] == '"' {
-					i++
-					break
-				}
-				i++
-			}
-			token := src[start:i]
-
-			// Look ahead past spaces to see if followed by ':'
-			j := i
-			for j < n && (src[j] == ' ' || src[j] == '\t') {
-				j++
-			}
-			isKey := j < n && src[j] == ':'
-
-			if isKey {
-				spans = append(spans, ui.Span{
-					Text:   token,
-					Font:   "monospace",
-					Color:  colKey,
-					Weight: 600,
-				})
-			} else {
-				spans = append(spans, ui.Span{
-					Text:  token,
-					Font:  "monospace",
-					Color: colStr,
-				})
-			}
-			continue
-		}
-
-		// Number token
-		if (ch >= '0' && ch <= '9') || ch == '-' {
-			start := i
-			i++
-			for i < n && ((src[i] >= '0' && src[i] <= '9') || src[i] == '.' || src[i] == 'e' || src[i] == 'E' || src[i] == '+' || src[i] == '-') {
-				i++
-			}
-			spans = append(spans, ui.Span{
-				Text:  src[start:i],
-				Font:  "monospace",
-				Color: colNum,
-			})
-			continue
-		}
-
-		// Boolean or null literal
-		if strings.HasPrefix(src[i:], "true") || strings.HasPrefix(src[i:], "false") || strings.HasPrefix(src[i:], "null") {
-			litLen := 4
-			if strings.HasPrefix(src[i:], "false") {
-				litLen = 5
-			}
-			spans = append(spans, ui.Span{
-				Text:   src[i : i+litLen],
-				Font:   "monospace",
-				Color:  colBool,
-				Weight: 600,
-			})
-			i += litLen
-			continue
-		}
-
-		// Punctuation & whitespace
-		start := i
-		for i < n {
-			c := src[i]
-			if c == '"' || (c >= '0' && c <= '9') || c == '-' ||
-				strings.HasPrefix(src[i:], "true") || strings.HasPrefix(src[i:], "false") || strings.HasPrefix(src[i:], "null") {
-				break
-			}
-			i++
-		}
-		spans = append(spans, ui.Span{
-			Text:  src[start:i],
-			Font:  "monospace",
-			Color: colPunct,
-		})
-	}
-
-	return spans
 }

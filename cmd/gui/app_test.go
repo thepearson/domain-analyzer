@@ -2,10 +2,10 @@ package main
 
 import (
 	"bytes"
-	"fmt"
 	"image"
 	"image/color"
 	"image/png"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -452,9 +452,9 @@ func TestDesktopAppDrillDownAndFeatures(t *testing.T) {
 		t.Errorf("expected HTTP Security Headers Checklist grid with '2/6 Configured' pill to be rendered")
 	}
 
-	// Switch back to "Summary & Reputation" sub-tab
-	if err := tester.Click("Summary & Reputation"); err != nil {
-		t.Fatalf("clicking 'Summary & Reputation' sub-tab failed: %v", err)
+	// Switch back to "REPUTATION & WHOIS"
+	if err := tester.Click("REPUTATION & WHOIS"); err != nil {
+		t.Fatalf("clicking 'REPUTATION & WHOIS' tile failed: %v", err)
 	}
 
 	// Test adjusting text size up and down in the GUI
@@ -497,33 +497,42 @@ func TestDesktopAppDrillDownAndFeatures(t *testing.T) {
 		t.Errorf("expected theme mode 0 ('🌓 Auto') after cycle")
 	}
 
-	// Switch to Raw JSON tab and verify syntax-highlighted JSON & Copy button
-	if err := tester.Click("Raw JSON"); err != nil {
-		t.Fatalf("clicking 'Raw JSON' tab failed: %v", err)
+	// Verify Copy JSON button in scan header bar
+	if !tester.HasText("Copy JSON") {
+		t.Fatalf("expected 'Copy JSON' button in scan header bar")
 	}
-	if !tester.HasText("Copy JSON to Clipboard") {
-		t.Fatalf("expected 'Copy JSON to Clipboard' button on Raw JSON tab")
-	}
-	if err := tester.Click("Copy JSON to Clipboard"); err != nil {
-		t.Fatalf("clicking 'Copy JSON to Clipboard' failed: %v", err)
+	if err := tester.Click("Copy JSON"); err != nil {
+		t.Fatalf("clicking 'Copy JSON' failed: %v", err)
 	}
 	if !strings.Contains(tester.Clipboard(), `"domain": "portal.example.co.nz"`) {
 		t.Errorf("expected formatted JSON in clipboard, got: %s", tester.Clipboard())
 	}
 
-	// Switch to Discovered Targets tab and verify compact pivot row summary
-	pivotsTabLabel := fmt.Sprintf("Discovered Targets (%d)", len(app.currentPivots))
-	if err := tester.Click(pivotsTabLabel); err != nil {
-		t.Fatalf("clicking %q tab failed: %v", pivotsTabLabel, err)
+	// Test Save Session Modal
+	if !tester.HasText("Save Session 💾") {
+		t.Fatalf("expected 'Save Session 💾' button in top bar")
+	}
+	if err := tester.Click("Save Session 💾"); err != nil {
+		t.Fatalf("clicking 'Save Session 💾' failed: %v", err)
+	}
+	sessionTestFile := filepath.Join(t.TempDir(), "test_session_export.json")
+	app.sessionFilePath = sessionTestFile
+	if err := tester.Click("Save Session"); err != nil {
+		t.Fatalf("clicking 'Save Session' confirm button failed: %v", err)
+	}
+	if _, err := os.Stat(sessionTestFile); err != nil {
+		t.Errorf("expected session file to be created at %s, got: %v", sessionTestFile, err)
+	}
+
+	// Switch to Discovered Targets view and verify compact pivot row summary
+	if err := tester.Click("TARGETS DISCOVERED"); err != nil {
+		t.Fatalf("clicking 'TARGETS DISCOVERED' tile failed: %v", err)
 	}
 	if !tester.HasText("Total Targets:") || !tester.HasText("example.co.nz") {
 		t.Errorf("expected Discovered Targets summary and apex domain pivot row to be rendered")
 	}
 
-	// Switch back to Overview & Details tab and drill down into IP
-	if err := tester.Click("Overview & Details"); err != nil {
-		t.Fatalf("clicking 'Overview & Details' tab failed: %v", err)
-	}
+	// Drill down directly into IP from the pivot row
 	if err := tester.Click("Scan IP ↗"); err != nil {
 		t.Fatalf("clicking 'Scan IP ↗' failed: %v", err)
 	}
@@ -549,9 +558,9 @@ func TestDesktopAppDrillDownAndFeatures(t *testing.T) {
 		t.Errorf("expected child scan tree indicator '└─' in sidebar")
 	}
 
-	// Switch to "Ports & Network" sub-tab on the IP scan and run a host port scan
-	if err := tester.Click("Ports & Network"); err != nil {
-		t.Fatalf("clicking 'Ports & Network' sub-tab on IP scan failed: %v", err)
+	// Switch to "PORTS & PING" on the IP scan and run a host port scan
+	if err := tester.Click("PORTS & PING"); err != nil {
+		t.Fatalf("clicking 'PORTS & PING' tile on IP scan failed: %v", err)
 	}
 	if err := tester.Click("Scan Host Ports"); err != nil {
 		t.Fatalf("clicking 'Scan Host Ports' failed: %v", err)
@@ -579,9 +588,9 @@ func TestDesktopAppDrillDownAndFeatures(t *testing.T) {
 		t.Errorf("expected parent scan JSON export to include child IP scan and port scan data, got:\n%s", app.rawJSONReadOnly)
 	}
 
-	// Switch to "Network & Ping" sub-tab and run Ping and Traceroute on the domain scan
-	if err := tester.Click("Network & Ping"); err != nil {
-		t.Fatalf("clicking 'Network & Ping' sub-tab failed: %v", err)
+	// Switch to "REACHABILITY" on the domain scan and run Ping and Traceroute
+	if err := tester.Click("REACHABILITY"); err != nil {
+		t.Fatalf("clicking 'REACHABILITY' tile failed: %v", err)
 	}
 	if err := tester.Click("Run Ping"); err != nil {
 		t.Fatalf("clicking 'Run Ping' failed: %v", err)
@@ -611,9 +620,9 @@ func TestDesktopAppDrillDownAndFeatures(t *testing.T) {
 		t.Errorf("expected Traceroute hop IP and hostname to be rendered on scan page")
 	}
 
-	// Switch to "DNS & Subdomains" sub-tab and run DNSSEC/Zone Audit and Passive Subdomain Enumeration
-	if err := tester.Click("DNS & Subdomains"); err != nil {
-		t.Fatalf("clicking 'DNS & Subdomains' sub-tab failed: %v", err)
+	// Switch to "DNS & ZONE" and run DNSSEC/Zone Audit and Passive Subdomain Enumeration
+	if err := tester.Click("DNS & ZONE"); err != nil {
+		t.Fatalf("clicking 'DNS & ZONE' tile failed: %v", err)
 	}
 	if err := tester.Click("Audit DNSSEC & Zone"); err != nil {
 		t.Fatalf("clicking 'Audit DNSSEC & Zone' failed: %v", err)
@@ -650,9 +659,9 @@ func TestDesktopAppDrillDownAndFeatures(t *testing.T) {
 		t.Errorf("expected discovered subdomains to be rendered on scan page")
 	}
 
-	// Switch to "Web, TLS & WAF" sub-tab and run TLS Audit, CVE Check, HTTP Trace, and Metadata Inspection
-	if err := tester.Click("Web, TLS & WAF"); err != nil {
-		t.Fatalf("clicking 'Web, TLS & WAF' sub-tab failed: %v", err)
+	// Switch to "TLS, WAF & WEB" and run TLS Audit, CVE Check, HTTP Trace, and Metadata Inspection
+	if err := tester.Click("TLS, WAF & WEB"); err != nil {
+		t.Fatalf("clicking 'TLS, WAF & WEB' tile failed: %v", err)
 	}
 	if err := tester.Click("Audit TLS & Ciphers"); err != nil {
 		t.Fatalf("clicking 'Audit TLS & Ciphers' failed: %v", err)
@@ -710,9 +719,9 @@ func TestDesktopAppDrillDownAndFeatures(t *testing.T) {
 		t.Errorf("expected robots.txt disallow path and security.txt contact to be rendered on scan page")
 	}
 
-	// Switch to "Email & Auth" sub-tab and run Email Deliverability & Authentication Deep-Dive
-	if err := tester.Click("Email & Auth"); err != nil {
-		t.Fatalf("clicking 'Email & Auth' sub-tab failed: %v", err)
+	// Switch to "EMAIL SECURITY" and run Email Deliverability & Authentication Deep-Dive
+	if err := tester.Click("EMAIL SECURITY"); err != nil {
+		t.Fatalf("clicking 'EMAIL SECURITY' tile failed: %v", err)
 	}
 	if err := tester.Click("Audit Email Auth"); err != nil {
 		t.Fatalf("clicking 'Audit Email Auth' failed: %v", err)
@@ -735,9 +744,9 @@ func TestDesktopAppDrillDownAndFeatures(t *testing.T) {
 		t.Errorf("expected raw SPF TXT string to be visible after clicking '▸ Show Raw SPF TXT Record'")
 	}
 
-	// Switch to "Summary & Reputation" sub-tab and run DNSBL / Reputation & Blacklist Check
-	if err := tester.Click("Summary & Reputation"); err != nil {
-		t.Fatalf("clicking 'Summary & Reputation' sub-tab failed: %v", err)
+	// Switch to "REPUTATION & WHOIS" and run DNSBL / Reputation & Blacklist Check
+	if err := tester.Click("REPUTATION & WHOIS"); err != nil {
+		t.Fatalf("clicking 'REPUTATION & WHOIS' tile failed: %v", err)
 	}
 	if err := tester.Click("Check Blacklists (DNSBL)"); err != nil {
 		t.Fatalf("clicking 'Check Blacklists (DNSBL)' failed: %v", err)
@@ -753,6 +762,14 @@ func TestDesktopAppDrillDownAndFeatures(t *testing.T) {
 		t.Errorf("expected Clean (0/12 Blacklists) badge, Spamhaus DBL card, and Google Safe Browsing link to be rendered")
 	}
 
+	// Test clicking "TARGETS DISCOVERED" Executive Scorecard tile to switch to Discovered Targets sub-tab
+	if err := tester.Click("TARGETS DISCOVERED"); err != nil {
+		t.Fatalf("clicking 'TARGETS DISCOVERED' scorecard tile failed: %v", err)
+	}
+	if app.domainCategoryTab != DomainTabTargets {
+		t.Errorf("expected domainCategoryTab to be DomainTabTargets (5), got %d", app.domainCategoryTab)
+	}
+
 	// Verify favicon persisted across sessions in scan list
 	app2 := NewDesktopApp(store)
 	if len(app2.scans) != 2 {
@@ -763,5 +780,28 @@ func TestDesktopAppDrillDownAndFeatures(t *testing.T) {
 	}
 	if app2.scans[1].Depth != 1 || app2.scans[1].ParentScanID != parentID {
 		t.Errorf("expected second scan in tree to be child IP scan at depth 1, got %+v", app2.scans[1])
+	}
+
+	// Test Open Session Modal on a fresh app and database
+	freshDB := filepath.Join(t.TempDir(), "fresh.db")
+	freshStore, err := storage.Open(freshDB)
+	if err != nil {
+		t.Fatalf("opening fresh store failed: %v", err)
+	}
+	defer freshStore.Close()
+	app3 := NewDesktopApp(freshStore)
+	tester3 := ui.NewTester(app3.View, 1280, 820)
+	if !tester3.HasText("Open Session 📁") {
+		t.Fatalf("expected 'Open Session 📁' button in top bar")
+	}
+	if err := tester3.Click("Open Session 📁"); err != nil {
+		t.Fatalf("clicking 'Open Session 📁' failed: %v", err)
+	}
+	app3.sessionFilePath = sessionTestFile
+	if err := tester3.Click("Open & Import"); err != nil {
+		t.Fatalf("clicking 'Open & Import' failed: %v", err)
+	}
+	if len(app3.scans) == 0 {
+		t.Errorf("expected scans to be loaded into app3 after importing session")
 	}
 }
