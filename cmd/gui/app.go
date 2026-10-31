@@ -1268,6 +1268,13 @@ func (app *DesktopApp) renderDetailPane(c *ui.Context, t *ui.Theme) {
 			len(app.childScans),
 		)).FontSize(app.fs(12)).TextColor(t.TextMuted)
 
+		// At-a-Glance Executive Scorecard Tiles (click any tile to jump to its category sub-tab)
+		if scan.TargetType == analyzer.TargetTypeIP && scan.IPInfo != nil {
+			app.renderIPScorecard(c, t, scan.IPInfo)
+		} else if scan.DomainInfo != nil {
+			app.renderDomainScorecard(c, t, scan.DomainInfo)
+		}
+
 		// Navigation Tabs
 		tabLabels := []string{
 			"Overview & Details",
@@ -1367,6 +1374,291 @@ func (app *DesktopApp) renderPivotActionRow(c *ui.Context, t *ui.Theme, parentSc
 		if ui.Button(c, btnLabel).Disabled(app.scanning).Clicked() {
 			app.StartScan(lookupKey, parentScanID, reason)
 		}
+	})
+}
+
+type scorecardTone uint8
+
+const (
+	toneNeutral scorecardTone = iota
+	toneSuccess
+	toneWarning
+	toneDanger
+)
+
+func (app *DesktopApp) toneColor(t *ui.Theme, tone scorecardTone) ui.Color {
+	switch tone {
+	case toneSuccess:
+		return t.Success
+	case toneWarning:
+		return t.Warning
+	case toneDanger:
+		return t.Danger
+	default:
+		return t.Accent
+	}
+}
+
+func (app *DesktopApp) renderScorecardTile(c *ui.Context, t *ui.Theme, key string, title string, headline string, subtitle string, tone scorecardTone, isActive bool, onClick func()) {
+	accentCol := app.toneColor(t, tone)
+	borderCol := t.Border
+	bgCol := t.Surface
+	if isActive {
+		borderCol = accentCol
+		bgCol = t.SurfaceHover
+	}
+
+	tile := ui.Box(c).
+		Key("scorecard:"+key).
+		Grow(1).
+		MinWidth(155).
+		PaddingX(10).
+		PaddingY(8).
+		Radius(8).
+		Background(bgCol).
+		Border(1, borderCol).
+		BorderStartWidth(4).
+		Cursor(ui.CursorPointer)
+
+	tile.Children(func() {
+		ui.Column(c).FillWidth().Gap(3).Children(func() {
+			ui.Text(c, title).FontSize(app.fs(10)).Bold().TextColor(t.TextMuted)
+			ui.Text(c, headline).FontSize(app.fs(14)).Bold().TextColor(accentCol).MaxLines(1).Ellipsis("...")
+			ui.Text(c, subtitle).FontSize(app.fs(11)).TextColor(t.TextMuted).MaxLines(1).Ellipsis("...")
+		})
+	})
+
+	if tile.Clicked() && onClick != nil {
+		onClick()
+	}
+}
+
+func (app *DesktopApp) renderDomainScorecard(c *ui.Context, t *ui.Theme, info *analyzer.DomainInfo) {
+	// 1. Reputation & Registration Tile
+	repHeadline := "WHOIS & IP"
+	if info.Registrar != "" {
+		repHeadline = info.Registrar
+	}
+	repSub := "IP: None resolved"
+	if info.DNS.IPAddress != "" {
+		repSub = "IP: " + info.DNS.IPAddress
+	}
+	repTone := toneNeutral
+	if info.Reputation != nil && info.Reputation.Checked {
+		if info.Reputation.ListedCount > 0 {
+			repHeadline = fmt.Sprintf("Blacklisted (%d)", info.Reputation.ListedCount)
+			repTone = toneDanger
+		} else {
+			repHeadline = fmt.Sprintf("Clean (0/%d RBLs)", info.Reputation.TotalChecked)
+			repTone = toneSuccess
+		}
+	}
+
+	// 2. DNS, DNSSEC & Subdomains Tile
+	dnsHeadline := "DNS Resolved"
+	dnsTone := toneNeutral
+	if info.DNS.IPAddress == "" {
+		dnsHeadline = "No A Record"
+		dnsTone = toneWarning
+	}
+	if info.ZoneAudit != nil && info.ZoneAudit.Audited {
+		if info.ZoneAudit.AXFRVulnerable {
+			dnsHeadline = "AXFR Vulnerable!"
+			dnsTone = toneDanger
+		} else if info.ZoneAudit.DNSSECEnabled {
+			dnsHeadline = "DNSSEC Signed"
+			dnsTone = toneSuccess
+		} else {
+			dnsHeadline = "DNSSEC Unsigned"
+			dnsTone = toneWarning
+		}
+	}
+	var dnsSubParts []string
+	if info.ZoneAudit != nil && info.ZoneAudit.HasIPv6 {
+		dnsSubParts = append(dnsSubParts, "Dual-Stack IPv6")
+	} else {
+		dnsSubParts = append(dnsSubParts, fmt.Sprintf("%d NS", len(info.DNS.Nameservers)))
+	}
+	if info.Subdomains != nil {
+		dnsSubParts = append(dnsSubParts, fmt.Sprintf("%d Subdomains", info.Subdomains.TotalFound))
+	}
+	dnsSub := strings.Join(dnsSubParts, " • ")
+
+	// 3. TLS, Web & WAF Tile
+	tlsHeadline := "No HTTPS"
+	tlsTone := toneDanger
+	if info.TLS.HasTLS {
+		if info.TLS.Grade != "" {
+			tlsHeadline = "TLS Grade " + info.TLS.Grade
+			switch info.TLS.Grade {
+			case "A+", "A":
+				tlsTone = toneSuccess
+			case "B", "C":
+				tlsTone = toneWarning
+			default:
+				tlsTone = toneDanger
+			}
+		} else {
+			tlsHeadline = "HTTPS Active"
+			tlsTone = toneSuccess
+		}
+	}
+	wafShort := "No WAF"
+	if info.WAF.Detected {
+		wafShort = "WAF Active"
+	}
+	if len(info.Vulnerabilities) > 0 {
+		wafShort += fmt.Sprintf(" • %d CVEs", len(info.Vulnerabilities))
+		tlsTone = toneDanger
+	} else if len(info.Web.TechDetails) > 0 {
+		wafShort += fmt.Sprintf(" • %d Techs", len(info.Web.TechDetails))
+	}
+
+	// 4. Email Security Tile
+	emailHeadline := "Unprotected"
+	emailTone := toneWarning
+	hasSPF := info.Email.SPFRecord != nil
+	hasDMARC := info.Email.DMARCRecord != nil
+	if hasSPF && hasDMARC {
+		if info.Email.SPFRecord.Status == "Secure" && info.Email.DMARCRecord.Status == "Secure" {
+			emailHeadline = "SPF + DMARC Enforced"
+			emailTone = toneSuccess
+		} else {
+			emailHeadline = "SPF + DMARC Partial"
+			emailTone = toneWarning
+		}
+	} else if hasSPF || hasDMARC {
+		emailHeadline = "Partial Email Auth"
+		emailTone = toneWarning
+	}
+	emailSub := "No MX detected"
+	if len(info.Email.MailProviders) > 0 {
+		emailSub = info.Email.MailProviders[0]
+	}
+	if len(info.Email.DKIMRecords) > 0 {
+		emailSub += fmt.Sprintf(" • %d DKIM", len(info.Email.DKIMRecords))
+	}
+
+	// 5. Network & Reachability Tile
+	netHeadline := "Not Pinged"
+	netSub := "Click to test latency & path"
+	netTone := toneNeutral
+	if info.Ping != nil {
+		if info.Ping.Reachable {
+			netHeadline = "RTT " + info.Ping.AvgRTT
+			netSub = fmt.Sprintf("%.0f%% Loss (%s)", info.Ping.LossPercent, info.Ping.Method)
+			if info.Ping.LossPercent == 0 {
+				netTone = toneSuccess
+			} else {
+				netTone = toneWarning
+			}
+		} else {
+			netHeadline = "Unreachable"
+			netSub = "100% Packet Loss"
+			netTone = toneDanger
+		}
+	}
+	if info.Traceroute != nil && len(info.Traceroute.Hops) > 0 {
+		netSub += fmt.Sprintf(" • %d Hops", len(info.Traceroute.Hops))
+	}
+
+	ui.Row(c).FillWidth().Gap(8).AlignItems(ui.Center).Wrap().Children(func() {
+		app.renderScorecardTile(c, t, "dom-summary", "REPUTATION & WHOIS", repHeadline, repSub, repTone,
+			app.activeTab == 0 && app.domainCategoryTab == DomainTabSummary, func() {
+				app.activeTab = 0
+				app.domainCategoryTab = DomainTabSummary
+			})
+		app.renderScorecardTile(c, t, "dom-dns", "DNS & ZONE", dnsHeadline, dnsSub, dnsTone,
+			app.activeTab == 0 && app.domainCategoryTab == DomainTabDNS, func() {
+				app.activeTab = 0
+				app.domainCategoryTab = DomainTabDNS
+			})
+		app.renderScorecardTile(c, t, "dom-web", "TLS, WAF & WEB", tlsHeadline, wafShort, tlsTone,
+			app.activeTab == 0 && app.domainCategoryTab == DomainTabWebTLSWAF, func() {
+				app.activeTab = 0
+				app.domainCategoryTab = DomainTabWebTLSWAF
+			})
+		app.renderScorecardTile(c, t, "dom-email", "EMAIL SECURITY", emailHeadline, emailSub, emailTone,
+			app.activeTab == 0 && app.domainCategoryTab == DomainTabEmail, func() {
+				app.activeTab = 0
+				app.domainCategoryTab = DomainTabEmail
+			})
+		app.renderScorecardTile(c, t, "dom-net", "REACHABILITY", netHeadline, netSub, netTone,
+			app.activeTab == 0 && app.domainCategoryTab == DomainTabNetwork, func() {
+				app.activeTab = 0
+				app.domainCategoryTab = DomainTabNetwork
+			})
+	})
+}
+
+func (app *DesktopApp) renderIPScorecard(c *ui.Context, t *ui.Theme, info *analyzer.IPInfo) {
+	// 1. IP Ownership & Reputation Tile
+	repHeadline := info.Owner
+	if repHeadline == "" {
+		repHeadline = info.IP
+	}
+	repTone := toneNeutral
+	if info.Reputation != nil && info.Reputation.Checked {
+		if info.Reputation.ListedCount > 0 {
+			repHeadline = fmt.Sprintf("Blacklisted (%d)", info.Reputation.ListedCount)
+			repTone = toneDanger
+		} else {
+			repHeadline = fmt.Sprintf("Clean (0/%d RBLs)", info.Reputation.TotalChecked)
+			repTone = toneSuccess
+		}
+	}
+	repSub := fmt.Sprintf("ASN: %s • %d PTRs", info.ASN, len(info.PTRRecords))
+
+	// 2. TLS, Web & WAF Tile
+	tlsHeadline := "No HTTPS (:443)"
+	tlsTone := toneNeutral
+	if info.TLS.HasTLS {
+		if info.TLS.Grade != "" {
+			tlsHeadline = "TLS Grade " + info.TLS.Grade
+			if info.TLS.Grade == "A+" || info.TLS.Grade == "A" {
+				tlsTone = toneSuccess
+			} else {
+				tlsTone = toneWarning
+			}
+		} else {
+			tlsHeadline = "HTTPS Active (:443)"
+			tlsTone = toneSuccess
+		}
+	}
+	webSub := fmt.Sprintf("%d Techs • %d SANs", len(info.Web.TechDetails), len(info.TLS.SANDomains))
+
+	// 3. Ports & Reachability Tile
+	portHeadline := "Ports Not Scanned"
+	portTone := toneNeutral
+	if info.PortScanned {
+		portHeadline = fmt.Sprintf("%d Open Ports", len(info.OpenPorts))
+		if len(info.OpenPorts) > 0 {
+			portTone = toneWarning
+		} else {
+			portTone = toneSuccess
+		}
+	}
+	portSub := "Ping not run"
+	if info.Ping != nil && info.Ping.Reachable {
+		portSub = "RTT " + info.Ping.AvgRTT
+	}
+
+	ui.Row(c).FillWidth().Gap(8).AlignItems(ui.Center).Wrap().Children(func() {
+		app.renderScorecardTile(c, t, "ip-summary", "IP & REPUTATION", repHeadline, repSub, repTone,
+			app.activeTab == 0 && app.ipCategoryTab == IPTabSummary, func() {
+				app.activeTab = 0
+				app.ipCategoryTab = IPTabSummary
+			})
+		app.renderScorecardTile(c, t, "ip-web", "TLS, WAF & HTTP", tlsHeadline, webSub, tlsTone,
+			app.activeTab == 0 && app.ipCategoryTab == IPTabWebTLSWAF, func() {
+				app.activeTab = 0
+				app.ipCategoryTab = IPTabWebTLSWAF
+			})
+		app.renderScorecardTile(c, t, "ip-net", "PORTS & PING", portHeadline, portSub, portTone,
+			app.activeTab == 0 && app.ipCategoryTab == IPTabNetwork, func() {
+				app.activeTab = 0
+				app.ipCategoryTab = IPTabNetwork
+			})
 	})
 }
 

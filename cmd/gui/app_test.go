@@ -431,9 +431,12 @@ func TestDesktopAppDrillDownAndFeatures(t *testing.T) {
 		t.Errorf("expected UI to render DNC .nz WHOIS link on Summary & Reputation sub-tab")
 	}
 
-	// Switch to "Web, TLS & WAF" sub-tab to verify OWASP challenge links and tech stack links
-	if err := tester.Click("Web, TLS & WAF"); err != nil {
-		t.Fatalf("clicking 'Web, TLS & WAF' sub-tab failed: %v", err)
+	// Verify Executive Scorecard tiles are displayed at the top and clicking "TLS, WAF & WEB" jumps to Web, TLS & WAF sub-tab
+	if !tester.HasText("REPUTATION & WHOIS") || !tester.HasText("TLS, WAF & WEB") || !tester.HasText("EMAIL SECURITY") {
+		t.Errorf("expected Executive Scorecard KPI tiles to be rendered")
+	}
+	if err := tester.Click("TLS, WAF & WEB"); err != nil {
+		t.Fatalf("clicking 'TLS, WAF & WEB' scorecard tile failed: %v", err)
 	}
 	if !tester.HasText("OWASP XSS Challenge ↗") {
 		t.Errorf("expected UI to render OWASP XSS Challenge link on Web, TLS & WAF sub-tab")
