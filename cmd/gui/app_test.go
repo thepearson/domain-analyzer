@@ -474,6 +474,29 @@ func TestDesktopAppDrillDownAndFeatures(t *testing.T) {
 		t.Errorf("expected text size indicator '100%%' after clicking A-")
 	}
 
+	// Test Theme Mode toggling: Auto -> Light -> Dark -> Auto
+	if !tester.HasText("🌓 Auto") {
+		t.Errorf("expected theme toggle button '🌓 Auto'")
+	}
+	if err := tester.Click("🌓 Auto"); err != nil {
+		t.Fatalf("clicking '🌓 Auto' failed: %v", err)
+	}
+	if !tester.HasText("☀️ Light") || app.themeMode != 1 {
+		t.Errorf("expected theme mode 1 ('☀️ Light') after toggle")
+	}
+	if err := tester.Click("☀️ Light"); err != nil {
+		t.Fatalf("clicking '☀️ Light' failed: %v", err)
+	}
+	if !tester.HasText("🌙 Dark") || app.themeMode != 2 {
+		t.Errorf("expected theme mode 2 ('🌙 Dark') after toggle")
+	}
+	if err := tester.Click("🌙 Dark"); err != nil {
+		t.Fatalf("clicking '🌙 Dark' failed: %v", err)
+	}
+	if !tester.HasText("🌓 Auto") || app.themeMode != 0 {
+		t.Errorf("expected theme mode 0 ('🌓 Auto') after cycle")
+	}
+
 	// Switch to Raw JSON tab and verify syntax-highlighted JSON & Copy button
 	if err := tester.Click("Raw JSON"); err != nil {
 		t.Fatalf("clicking 'Raw JSON' tab failed: %v", err)

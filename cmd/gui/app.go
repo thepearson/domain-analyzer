@@ -172,6 +172,7 @@ type DesktopApp struct {
 	activeTab         int
 	domainCategoryTab int
 	ipCategoryTab     int
+	themeMode         int // 0: Auto (system), 1: Light, 2: Dark
 
 	scanning   bool
 	statusText string
@@ -1037,8 +1038,15 @@ func (app *DesktopApp) View(c *ui.Context) {
 	if app.textScale <= 0 {
 		app.textScale = 1.0
 	}
+	isDark := c.Theme().Dark
+	if app.themeMode == 1 {
+		isDark = false
+	} else if app.themeMode == 2 {
+		isDark = true
+	}
+
 	baseTheme := ui.LightTheme()
-	if c.Theme().Dark {
+	if isDark {
 		baseTheme = ui.DarkTheme()
 	}
 	defaultFontSize := baseTheme.FontSize
@@ -1046,6 +1054,7 @@ func (app *DesktopApp) View(c *ui.Context) {
 		defaultFontSize = 13
 	}
 	scaledTheme := *baseTheme
+	scaledTheme.Dark = isDark
 	scaledTheme.FontSize = defaultFontSize * app.textScale
 	c.SetTheme(&scaledTheme)
 	t := c.Theme()
@@ -1100,6 +1109,17 @@ func (app *DesktopApp) renderTopBar(c *ui.Context, t *ui.Theme) {
 				app.IncreaseTextSize()
 			}
 		})
+
+		// Theme Appearance Toggle (Auto / Light / Dark)
+		themeLabel := "🌓 Auto"
+		if app.themeMode == 1 {
+			themeLabel = "☀️ Light"
+		} else if app.themeMode == 2 {
+			themeLabel = "🌙 Dark"
+		}
+		if ui.Button(c, themeLabel).Tooltip("Toggle theme appearance (Auto / Light / Dark)").Clicked() {
+			app.themeMode = (app.themeMode + 1) % 3
+		}
 	})
 }
 
@@ -1108,7 +1128,7 @@ func (app *DesktopApp) renderSidebar(c *ui.Context, t *ui.Theme) {
 		ui.Row(c).FillWidth().AlignItems(ui.Center).Children(func() {
 			ui.Text(c, "Saved Scans").FontSize(app.fs(14)).Bold()
 			ui.Spacer(c)
-			ui.Badge(c, fmt.Sprintf("%d", len(app.scans)))
+			app.renderStatusPill(c, t, fmt.Sprintf("%d", len(app.scans)), toneInfo)
 		})
 
 		if ui.SearchField(c, &app.searchQuery).Placeholder("Filter history...").FillWidth().Changed() {
@@ -1133,6 +1153,11 @@ func (app *DesktopApp) renderSidebar(c *ui.Context, t *ui.Theme) {
 					borderCol := t.Border
 					if isSelected {
 						borderCol = t.Accent
+						if t.Dark {
+							cardBg = ui.RGBA(59, 130, 246, 0.14)
+						} else {
+							cardBg = ui.RGBA(59, 130, 246, 0.08)
+						}
 					}
 
 					indent := float32(scanItem.Depth) * 18
@@ -1152,7 +1177,9 @@ func (app *DesktopApp) renderSidebar(c *ui.Context, t *ui.Theme) {
 							Background(cardBg).
 							Border(1, borderCol).
 							Cursor(ui.CursorPointer)
-						if isChild && !isSelected {
+						if isSelected {
+							card.BorderStartWidth(4)
+						} else if isChild {
 							card.BorderStartWidth(3)
 						}
 
@@ -1162,22 +1189,24 @@ func (app *DesktopApp) renderSidebar(c *ui.Context, t *ui.Theme) {
 									app.renderFavicon(c, scanItem.ID, scanItem.Favicon, 16)
 
 									typeBadge := "DOMAIN"
+									typeTone := toneInfo
 									if scanItem.TargetType == analyzer.TargetTypeIP {
 										typeBadge = "IP"
+										typeTone = toneNeutral
 									}
-									ui.Badge(c, typeBadge)
+									app.renderStatusPill(c, t, typeBadge, typeTone)
 									ui.Text(c, scanItem.Target).Bold().FontSize(app.fs(13))
 
 									if scanItem.ChildCount > 0 {
 										ui.Spacer(c)
-										ui.Badge(c, fmt.Sprintf("+%d child", scanItem.ChildCount))
+										app.renderStatusPill(c, t, fmt.Sprintf("+%d child", scanItem.ChildCount), toneSuccess)
 									}
 								})
 
 								if scanItem.PivotReason != "" {
-									ui.Text(c, fmt.Sprintf("Child scan via %s", scanItem.PivotReason)).
-										FontSize(app.fs(11)).
-										TextColor(t.Accent)
+									ui.Row(c).Gap(4).AlignItems(ui.Center).Children(func() {
+										app.renderStatusPill(c, t, "via "+scanItem.PivotReason, toneNeutral)
+									})
 								}
 
 								if scanItem.Summary != "" {
@@ -1188,9 +1217,15 @@ func (app *DesktopApp) renderSidebar(c *ui.Context, t *ui.Theme) {
 										Ellipsis("...")
 								}
 
-								ui.Text(c, scanItem.CreatedAt.Local().Format("2006-01-02 15:04:05")).
-									FontSize(app.fs(10)).
-									TextColor(t.TextMuted)
+								ui.Row(c).FillWidth().AlignItems(ui.Center).Children(func() {
+									ui.Text(c, scanItem.CreatedAt.Local().Format("2006-01-02 15:04")).
+										FontSize(app.fs(10)).
+										TextColor(t.TextMuted)
+									if isSelected {
+										ui.Spacer(c)
+										app.renderStatusPill(c, t, "ACTIVE", toneInfo)
+									}
+								})
 							})
 						})
 
