@@ -69,9 +69,9 @@ func WhoisBrowserURL(domain string, apexDomain string) (label string, whoisURL s
 		return "", ""
 	}
 	if strings.HasSuffix(strings.ToLower(lookupDomain), ".nz") {
-		return "Open Full .nz WHOIS (DNC) ↗", "https://dnc.org.nz/whois/whois-lookup/?domain_name=" + url.QueryEscape(lookupDomain)
+		return "Open .nz WHOIS ↗", "https://dnc.org.nz/whois/whois-lookup/?domain_name=" + url.QueryEscape(lookupDomain)
 	}
-	return "Open Full WHOIS in Browser ↗", "https://lookup.icann.org/en/lookup?name=" + url.QueryEscape(lookupDomain)
+	return "Open WHOIS ↗", "https://lookup.icann.org/en/lookup?name=" + url.QueryEscape(lookupDomain)
 }
 
 type owaspChallengeLink struct {
@@ -103,19 +103,19 @@ func buildOWASPChallengeLinks(target string, wafInfo analyzer.WAFInfo) []owaspCh
 
 	return []owaspChallengeLink{
 		{
-			Label: "Baseline URL ↗",
+			Label: "Baseline ↗",
 			URL:   baseURL,
 		},
 		{
-			Label: "OWASP XSS Challenge ↗",
+			Label: "XSS Probe ↗",
 			URL:   probeURL,
 		},
 		{
-			Label: "OWASP SQLi Challenge ↗",
+			Label: "SQLi Probe ↗",
 			URL:   appendQuery(baseURL, "id=1%27%20OR%20%271%27%3D%271"),
 		},
 		{
-			Label: "OWASP Path Traversal Challenge ↗",
+			Label: "Path Traversal ↗",
 			URL:   appendQuery(baseURL, "file=..%2F..%2Fetc%2Fpasswd"),
 		},
 	}
@@ -1852,7 +1852,7 @@ func (app *DesktopApp) renderDomainScorecard(c *ui.Context, t *ui.Theme, info *a
 	}
 
 	ui.Row(c).FillWidth().Gap(8).AlignItems(ui.Center).Wrap().Children(func() {
-		app.renderScorecardTile(c, t, "dom-summary", "REPUTATION & WHOIS", repHeadline, repSub, repTone,
+		app.renderScorecardTile(c, t, "dom-summary", "REPUTATION", repHeadline, repSub, repTone,
 			app.domainCategoryTab == DomainTabSummary, func() {
 				app.domainCategoryTab = DomainTabSummary
 			})
@@ -1860,19 +1860,19 @@ func (app *DesktopApp) renderDomainScorecard(c *ui.Context, t *ui.Theme, info *a
 			app.domainCategoryTab == DomainTabDNS, func() {
 				app.domainCategoryTab = DomainTabDNS
 			})
-		app.renderScorecardTile(c, t, "dom-web", "TLS, WAF & WEB", tlsHeadline, wafShort, tlsTone,
+		app.renderScorecardTile(c, t, "dom-web", "WEB & TLS", tlsHeadline, wafShort, tlsTone,
 			app.domainCategoryTab == DomainTabWebTLSWAF, func() {
 				app.domainCategoryTab = DomainTabWebTLSWAF
 			})
-		app.renderScorecardTile(c, t, "dom-email", "EMAIL SECURITY", emailHeadline, emailSub, emailTone,
+		app.renderScorecardTile(c, t, "dom-email", "EMAIL", emailHeadline, emailSub, emailTone,
 			app.domainCategoryTab == DomainTabEmail, func() {
 				app.domainCategoryTab = DomainTabEmail
 			})
-		app.renderScorecardTile(c, t, "dom-net", "REACHABILITY", netHeadline, netSub, netTone,
+		app.renderScorecardTile(c, t, "dom-net", "NETWORK", netHeadline, netSub, netTone,
 			app.domainCategoryTab == DomainTabNetwork, func() {
 				app.domainCategoryTab = DomainTabNetwork
 			})
-		app.renderScorecardTile(c, t, "dom-targets", "TARGETS DISCOVERED", fmt.Sprintf("%d Targets", len(app.currentPivots)), fmt.Sprintf("%d Child Scans", len(app.childScans)), toneInfo,
+		app.renderScorecardTile(c, t, "dom-targets", "TARGETS", fmt.Sprintf("%d Targets", len(app.currentPivots)), fmt.Sprintf("%d Child Scans", len(app.childScans)), toneInfo,
 			app.domainCategoryTab == DomainTabTargets, func() {
 				app.domainCategoryTab = DomainTabTargets
 			})
@@ -1932,19 +1932,19 @@ func (app *DesktopApp) renderIPScorecard(c *ui.Context, t *ui.Theme, info *analy
 	}
 
 	ui.Row(c).FillWidth().Gap(8).AlignItems(ui.Center).Wrap().Children(func() {
-		app.renderScorecardTile(c, t, "ip-summary", "IP & REPUTATION", repHeadline, repSub, repTone,
+		app.renderScorecardTile(c, t, "ip-summary", "REPUTATION", repHeadline, repSub, repTone,
 			app.ipCategoryTab == IPTabSummary, func() {
 				app.ipCategoryTab = IPTabSummary
 			})
-		app.renderScorecardTile(c, t, "ip-web", "TLS, WAF & HTTP", tlsHeadline, webSub, tlsTone,
+		app.renderScorecardTile(c, t, "ip-web", "WEB & TLS", tlsHeadline, webSub, tlsTone,
 			app.ipCategoryTab == IPTabWebTLSWAF, func() {
 				app.ipCategoryTab = IPTabWebTLSWAF
 			})
-		app.renderScorecardTile(c, t, "ip-net", "PORTS & PING", portHeadline, portSub, portTone,
+		app.renderScorecardTile(c, t, "ip-net", "PORTS", portHeadline, portSub, portTone,
 			app.ipCategoryTab == IPTabNetwork, func() {
 				app.ipCategoryTab = IPTabNetwork
 			})
-		app.renderScorecardTile(c, t, "ip-targets", "TARGETS DISCOVERED", fmt.Sprintf("%d Targets", len(app.currentPivots)), fmt.Sprintf("%d Child Scans", len(app.childScans)), toneInfo,
+		app.renderScorecardTile(c, t, "ip-targets", "TARGETS", fmt.Sprintf("%d Targets", len(app.currentPivots)), fmt.Sprintf("%d Child Scans", len(app.childScans)), toneInfo,
 			app.ipCategoryTab == IPTabTargets, func() {
 				app.ipCategoryTab = IPTabTargets
 			})
@@ -2064,8 +2064,8 @@ func (app *DesktopApp) renderTruncatedList(c *ui.Context, t *ui.Theme, key strin
 func (app *DesktopApp) renderDomainDetails(c *ui.Context, t *ui.Theme, scanID int64, info *analyzer.DomainInfo) {
 	switch app.domainCategoryTab {
 	case DomainTabSummary:
-		// 1. Domain Registration & Overview (with Full WHOIS Browser Link & Primary IP)
-		app.renderSectionCard(c, t, "Registration & Domain Overview", func() {
+		// 1. Overview (with Full WHOIS Browser Link & Primary IP)
+		app.renderSectionCard(c, t, "Overview", func() {
 			app.renderKeyValue(c, t, "Domain", info.Domain)
 			if info.ApexDomain != "" && !strings.EqualFold(info.ApexDomain, info.Domain) {
 				app.renderPivotActionRow(c, t, scanID, "Apex Domain", info.ApexDomain, "Apex Domain")
@@ -2091,12 +2091,12 @@ func (app *DesktopApp) renderDomainDetails(c *ui.Context, t *ui.Theme, scanID in
 			}
 		})
 
-		// 2. DNSBL / Reputation & Blacklist Check
+		// 2. Reputation & Blacklist Status
 		app.renderReputationCard(c, t, scanID, info.Domain, false, info.Reputation)
 
 	case DomainTabDNS:
-		// 1. DNS & IP Infrastructure (with IP & NS drill-downs)
-		app.renderSectionCard(c, t, "DNS & IP Infrastructure", func() {
+		// 1. DNS Infrastructure (with IP & NS drill-downs)
+		app.renderSectionCard(c, t, "DNS Infrastructure", func() {
 			if info.DNS.IPAddress != "" {
 				app.renderPivotActionRow(c, t, scanID, "A Record IP", info.DNS.IPAddress, "A Record")
 				app.renderKeyValue(c, t, "IP Owner & TTL", fmt.Sprintf("%s (TTL: %ds)", info.DNS.IPOwner, info.DNS.IPTTL))
@@ -2126,25 +2126,25 @@ func (app *DesktopApp) renderDomainDetails(c *ui.Context, t *ui.Theme, scanID in
 			}
 		})
 
-		// 2. DNSSEC, SOA, IPv6 (AAAA) & Zone Transfer (AXFR) Audit
+		// 2. DNSSEC & Zone Audit
 		app.renderZoneAuditCard(c, t, scanID, info)
 
-		// 3. Passive Subdomain Enumeration (Certificate Transparency & DNS)
+		// 3. Subdomains
 		app.renderSubdomainEnumerationCard(c, t, scanID, info)
 
 	case DomainTabWebTLSWAF:
-		// 1. WAF & Edge Protection (with CNAME chain drill-downs & OWASP Browser Challenges)
-		app.renderSectionCard(c, t, "WAF & Edge Protection", func() {
+		// 1. WAF & Edge
+		app.renderSectionCard(c, t, "WAF & Edge", func() {
 			app.renderKeyValue(c, t, "WAF Summary", info.WAF.Summary)
 			if info.WAF.BaselineStatus > 0 || info.WAF.ProbeStatus > 0 {
 				app.renderKeyValue(c, t, "HTTP Probe Status", fmt.Sprintf("Baseline: HTTP %d → XSS Probe: HTTP %d", info.WAF.BaselineStatus, info.WAF.ProbeStatus))
 			}
 
-			// OWASP Passive/Challenge Links in Default Browser
+			// OWASP Challenges in Default Browser
 			challenges := buildOWASPChallengeLinks(info.Domain, info.WAF)
 			if len(challenges) > 0 {
 				ui.Row(c).FillWidth().Gap(10).AlignItems(ui.Center).Wrap().Children(func() {
-					ui.Text(c, "OWASP Browser Challenges:").FontSize(app.fs(12)).TextColor(t.TextMuted).MinWidth(140)
+					ui.Text(c, "OWASP Challenges:").FontSize(app.fs(12)).TextColor(t.TextMuted).MinWidth(140)
 					for _, ch := range challenges {
 						ui.Link(c, ch.Label, ch.URL)
 					}
@@ -2152,7 +2152,7 @@ func (app *DesktopApp) renderDomainDetails(c *ui.Context, t *ui.Theme, scanID in
 			}
 
 			if len(info.WAF.CNAMEs) > 0 {
-				ui.Text(c, "CNAME Chain (Drill-Down):").FontSize(app.fs(12)).TextColor(t.TextMuted)
+				ui.Text(c, "CNAME Chain:").FontSize(app.fs(12)).TextColor(t.TextMuted)
 				ui.Column(c).FillWidth().Gap(4).Children(func() {
 					for _, cname := range info.WAF.CNAMEs {
 						app.renderPivotActionRow(c, t, scanID, "", cname, "CNAME")
@@ -2174,8 +2174,8 @@ func (app *DesktopApp) renderDomainDetails(c *ui.Context, t *ui.Theme, scanID in
 						if len(p.Evidence) > 0 {
 							evKey := fmt.Sprintf("waf-ev:%d:%s", scanID, p.Provider)
 							app.renderCollapsibleBlock(c, t, evKey,
-								fmt.Sprintf("▸ Show Detection Evidence (%d)", len(p.Evidence)),
-								"▾ Hide Detection Evidence",
+								fmt.Sprintf("▸ Show Evidence (%d)", len(p.Evidence)),
+								"▾ Hide Evidence",
 								func() {
 									ui.Text(c, "Evidence: "+strings.Join(p.Evidence, ", ")).FontSize(app.fs(11)).TextColor(t.TextMuted).Selectable()
 								})
@@ -2189,24 +2189,24 @@ func (app *DesktopApp) renderDomainDetails(c *ui.Context, t *ui.Theme, scanID in
 			}
 		})
 
-		// 2. Deep TLS & Cipher Suite Grading + Discovered SAN Domains
+		// 2. TLS Certificate & Ciphers
 		app.renderTLSGradingCard(c, t, scanID, info.Domain, &info.TLS)
 
-		// 3. Web Tech Stack & Security Headers (Deterministically ordered!) + On-Demand CVE Check
-		app.renderSectionCard(c, t, "Web Technologies & Security Headers", func() {
+		// 3. Technologies & Headers
+		app.renderSectionCard(c, t, "Technologies & Headers", func() {
 			app.renderTechStackList(c, t, info.Web)
 			app.renderWebCVESection(c, t, scanID, info.VulnsChecked, info.Vulnerabilities)
 			app.renderSecurityHeadersGrid(c, t, scanID, info.Web.SecurityHeaders)
 		})
 
-		// 4. HTTP Redirect Chain & Performance Timing Waterfall
+		// 4. HTTP Redirects & Timing
 		app.renderHTTPTraceCard(c, t, scanID, info.Domain, info.HTTPTrace)
 
-		// 5. Website Metadata & Well-Known Files (robots.txt, security.txt, sitemap.xml)
+		// 5. Website Metadata
 		app.renderMetadataCard(c, t, scanID, info.Domain, info.Metadata)
 
 	case DomainTabEmail:
-		// Email Deliverability & Authentication Deep-Dive (MX, SPF, DMARC, DKIM, MTA-STS, TLS-RPT, BIMI)
+		// Email Authentication (MX, SPF, DMARC, DKIM, MTA-STS, TLS-RPT, BIMI)
 		app.renderEmailAuthCard(c, t, scanID, info)
 
 	case DomainTabNetwork:
@@ -2223,7 +2223,7 @@ func (app *DesktopApp) renderIPDetails(c *ui.Context, t *ui.Theme, scanID int64,
 	switch app.ipCategoryTab {
 	case IPTabSummary:
 		// 1. IP WHOIS & Network Ownership
-		app.renderSectionCard(c, t, "IP Ownership & Network Details", func() {
+		app.renderSectionCard(c, t, "Overview", func() {
 			app.renderKeyValue(c, t, "IP Address", info.IP)
 			app.renderKeyValue(c, t, "Organization / Owner", info.Owner)
 			app.renderKeyValue(c, t, "ASN", info.ASN)
@@ -2233,13 +2233,13 @@ func (app *DesktopApp) renderIPDetails(c *ui.Context, t *ui.Theme, scanID int64,
 			if info.IP != "" {
 				ui.Row(c).FillWidth().Gap(8).AlignItems(ui.Center).Wrap().Children(func() {
 					ui.Text(c, "External WHOIS:").FontSize(app.fs(12)).TextColor(t.TextMuted).MinWidth(140)
-					ui.Link(c, "Open Full IP WHOIS in Browser ↗", "https://who.is/whois-ip/ip-address/"+url.PathEscape(info.IP))
+					ui.Link(c, "Open WHOIS ↗", "https://who.is/whois-ip/ip-address/"+url.PathEscape(info.IP))
 				})
 			}
 		})
 
 		// 2. Reverse DNS (PTR) Hostnames
-		app.renderSectionCard(c, t, "Reverse DNS (PTR Hostnames)", func() {
+		app.renderSectionCard(c, t, "Reverse DNS", func() {
 			if len(info.PTRRecords) == 0 {
 				ui.Text(c, "No PTR records found for this IP address.").FontSize(app.fs(12)).TextColor(t.TextMuted)
 				return
@@ -2259,7 +2259,7 @@ func (app *DesktopApp) renderIPDetails(c *ui.Context, t *ui.Theme, scanID int64,
 		app.renderTLSGradingCard(c, t, scanID, info.IP, &info.TLS)
 
 		// 2. Direct HTTP / WAF / Tech Stack on IP
-		app.renderSectionCard(c, t, "Direct HTTP, WAF & Tech Fingerprinting", func() {
+		app.renderSectionCard(c, t, "Web & Technologies", func() {
 			app.renderKeyValue(c, t, "WAF Summary", info.WAF.Summary)
 
 			challenges := buildOWASPChallengeLinks(info.IP, info.WAF)
@@ -2285,11 +2285,11 @@ func (app *DesktopApp) renderIPDetails(c *ui.Context, t *ui.Theme, scanID int64,
 
 	case IPTabNetwork:
 		// 1. Port & Service Discovery on IP
-		app.renderSectionCard(c, t, "Port & Service Discovery", func() {
+		app.renderSectionCard(c, t, "Port Discovery", func() {
 			ui.Row(c).FillWidth().Gap(10).AlignItems(ui.Center).Wrap().Children(func() {
-				btnLabel := "Scan Host Ports"
+				btnLabel := "Scan Ports"
 				if info.PortScanned {
-					btnLabel = "Re-scan Host Ports ↻"
+					btnLabel = "Re-scan Ports ↻"
 				}
 				if ui.PrimaryButton(c, btnLabel).Disabled(app.scanning).Clicked() {
 					checkVulns := false
@@ -2300,7 +2300,7 @@ func (app *DesktopApp) renderIPDetails(c *ui.Context, t *ui.Theme, scanID int64,
 				}
 
 				if !info.PortScanned {
-					ui.Text(c, "Click 'Scan Host Ports' to probe common TCP ports and identify operating services.").
+					ui.Text(c, "Click 'Scan Ports' to probe common TCP ports and identify operating services.").
 						FontSize(app.fs(12)).
 						TextColor(t.TextMuted)
 				} else {
@@ -2427,18 +2427,18 @@ func (app *DesktopApp) renderSecurityHeadersGrid(c *ui.Context, t *ui.Theme, sca
 }
 
 func (app *DesktopApp) renderHTTPTraceCard(c *ui.Context, t *ui.Theme, scanID int64, target string, trace *analyzer.HTTPTraceResult) {
-	app.renderSectionCard(c, t, "HTTP Redirect Chain & Performance Timing Waterfall", func() {
+	app.renderSectionCard(c, t, "HTTP Redirects & Timing", func() {
 		ui.Row(c).FillWidth().Gap(10).AlignItems(ui.Center).Wrap().Children(func() {
-			btnLabel := "Trace Redirects & Timing"
+			btnLabel := "Trace Redirects"
 			if trace != nil {
-				btnLabel = "Re-trace HTTP ↻"
+				btnLabel = "Re-trace ↻"
 			}
 			if ui.PrimaryButton(c, btnLabel).Disabled(app.scanning).Clicked() {
 				app.StartHTTPTrace(scanID)
 			}
 
 			if trace == nil {
-				ui.Text(c, "Click 'Trace Redirects & Timing' to inspect the HTTP → HTTPS redirect chain and phase-by-phase latency waterfall.").
+				ui.Text(c, "Click 'Trace Redirects' to inspect redirect hops and latency.").
 					FontSize(app.fs(12)).
 					TextColor(t.TextMuted)
 			} else {
@@ -2468,7 +2468,7 @@ func (app *DesktopApp) renderHTTPTraceCard(c *ui.Context, t *ui.Theme, scanID in
 			ui.Box(c).FillWidth().Padding(10).Radius(6).Border(1, t.Border).Children(func() {
 				ui.Column(c).FillWidth().Gap(6).Children(func() {
 					ui.Row(c).FillWidth().Gap(8).AlignItems(ui.Center).Wrap().Children(func() {
-						ui.Text(c, "Performance Timing Waterfall").FontSize(app.fs(13)).Bold()
+						ui.Text(c, "Timing Waterfall").FontSize(app.fs(13)).Bold()
 						if wf.Protocol != "" {
 							app.renderStatusPill(c, t, wf.Protocol, toneInfo)
 						}
@@ -2568,7 +2568,7 @@ func (app *DesktopApp) renderHTTPTraceCard(c *ui.Context, t *ui.Theme, scanID in
 
 		// 3. Discovered External / Subdomain Redirect Hosts
 		if len(trace.DiscoveredHosts) > 0 {
-			ui.Text(c, "Redirected Hosts (Drill-Down):").FontSize(app.fs(12)).TextColor(t.TextMuted)
+			ui.Text(c, "Redirected Hosts:").FontSize(app.fs(12)).TextColor(t.TextMuted)
 			for _, h := range trace.DiscoveredHosts {
 				app.renderPivotActionRow(c, t, scanID, "Redirect Host", h, "HTTP Redirect")
 			}
@@ -2577,9 +2577,9 @@ func (app *DesktopApp) renderHTTPTraceCard(c *ui.Context, t *ui.Theme, scanID in
 }
 
 func (app *DesktopApp) renderTLSGradingCard(c *ui.Context, t *ui.Theme, scanID int64, target string, tlsInfo *analyzer.TLSInfo) {
-	app.renderSectionCard(c, t, "Deep TLS, Cipher Suite Grading & Certificate SANs", func() {
+	app.renderSectionCard(c, t, "TLS Certificate & Ciphers", func() {
 		ui.Row(c).FillWidth().Gap(10).AlignItems(ui.Center).Wrap().Children(func() {
-			btnLabel := "Audit TLS & Ciphers"
+			btnLabel := "Audit TLS"
 			if tlsInfo != nil && tlsInfo.Grade != "" {
 				btnLabel = "Re-audit TLS ↻"
 			}
@@ -2638,7 +2638,7 @@ func (app *DesktopApp) renderTLSGradingCard(c *ui.Context, t *ui.Theme, scanID i
 		if len(tlsInfo.GradeWarnings) > 0 {
 			ui.Box(c).FillWidth().Padding(8).Radius(6).Border(1, t.Danger).Children(func() {
 				ui.Column(c).FillWidth().Gap(4).Children(func() {
-					ui.Text(c, "TLS Findings & Warnings:").FontSize(app.fs(12)).Bold().TextColor(t.Danger)
+					ui.Text(c, "TLS Warnings:").FontSize(app.fs(12)).Bold().TextColor(t.Danger)
 					for _, w := range tlsInfo.GradeWarnings {
 						ui.Text(c, "• "+w).FontSize(app.fs(12)).TextColor(t.Danger)
 					}
@@ -2677,8 +2677,8 @@ func (app *DesktopApp) renderTLSGradingCard(c *ui.Context, t *ui.Theme, scanID i
 		if len(tlsInfo.ChainSummary) > 0 {
 			chainKey := fmt.Sprintf("tls-chain:%d", scanID)
 			app.renderCollapsibleBlock(c, t, chainKey,
-				fmt.Sprintf("▸ Show Certificate Chain Details (%d Certificates)", len(tlsInfo.ChainSummary)),
-				"▾ Hide Certificate Chain Details",
+				fmt.Sprintf("▸ Show Certificate Chain (%d)", len(tlsInfo.ChainSummary)),
+				"▾ Hide Certificate Chain",
 				func() {
 					ui.Box(c).FillWidth().Padding(8).Radius(6).Background(t.Background).Border(1, t.Border).Children(func() {
 						ui.Column(c).FillWidth().Gap(4).Children(func() {
@@ -2691,7 +2691,7 @@ func (app *DesktopApp) renderTLSGradingCard(c *ui.Context, t *ui.Theme, scanID i
 		}
 
 		if len(tlsInfo.SANDomains) > 0 {
-			ui.Text(c, fmt.Sprintf("Subject Alternative Names (%d):", len(tlsInfo.SANDomains))).
+			ui.Text(c, fmt.Sprintf("SAN Domains (%d):", len(tlsInfo.SANDomains))).
 				FontSize(app.fs(12)).
 				TextColor(t.TextMuted)
 			sanKey := fmt.Sprintf("tls-sans:%d", scanID)
@@ -2705,7 +2705,7 @@ func (app *DesktopApp) renderTLSGradingCard(c *ui.Context, t *ui.Theme, scanID i
 }
 
 func (app *DesktopApp) renderMetadataCard(c *ui.Context, t *ui.Theme, scanID int64, target string, meta *analyzer.WebsiteMetadata) {
-	app.renderSectionCard(c, t, "Website Metadata & Well-Known Files (robots.txt, security.txt, sitemap.xml)", func() {
+	app.renderSectionCard(c, t, "Website Metadata", func() {
 		ui.Row(c).FillWidth().Gap(10).AlignItems(ui.Center).Wrap().Children(func() {
 			btnLabel := "Inspect Metadata"
 			if meta != nil {
@@ -2716,7 +2716,7 @@ func (app *DesktopApp) renderMetadataCard(c *ui.Context, t *ui.Theme, scanID int
 			}
 
 			if meta == nil {
-				ui.Text(c, "Click 'Inspect Metadata' to fetch and parse HTML metadata, /robots.txt, /.well-known/security.txt, and /sitemap.xml.").
+				ui.Text(c, "Click 'Inspect Metadata' to inspect metadata, robots.txt, and sitemap.xml.").
 					FontSize(app.fs(12)).
 					TextColor(t.TextMuted)
 			} else {
@@ -2809,7 +2809,7 @@ func (app *DesktopApp) renderMetadataCard(c *ui.Context, t *ui.Theme, scanID int
 		ui.Box(c).FillWidth().Padding(8).Radius(6).Border(1, t.Border).Children(func() {
 			ui.Column(c).FillWidth().Gap(6).Children(func() {
 				ui.Row(c).FillWidth().Gap(8).AlignItems(ui.Center).Wrap().Children(func() {
-					ui.Text(c, "security.txt (RFC 9116)").FontSize(app.fs(13)).Bold()
+					ui.Text(c, "security.txt").FontSize(app.fs(13)).Bold()
 					if meta.SecurityTxt.Found {
 						app.renderStatusPill(c, t, "PRESENT", toneSuccess)
 					} else {
@@ -2918,7 +2918,7 @@ func (app *DesktopApp) renderSubdomainEnumerationCard(c *ui.Context, t *ui.Theme
 		apex = info.Domain
 	}
 
-	app.renderSectionCard(c, t, "Passive Subdomain Enumeration (CT Logs & DNS)", func() {
+	app.renderSectionCard(c, t, "Subdomains", func() {
 		ui.Row(c).FillWidth().Gap(10).AlignItems(ui.Center).Wrap().Children(func() {
 			btnLabel := "Enumerate Subdomains"
 			if info.Subdomains != nil {
@@ -2929,7 +2929,7 @@ func (app *DesktopApp) renderSubdomainEnumerationCard(c *ui.Context, t *ui.Theme
 			}
 
 			if info.Subdomains == nil {
-				ui.Text(c, fmt.Sprintf("Click 'Enumerate Subdomains' to discover subdomains of %s via Certificate Transparency (crt.sh) & DNS.", apex)).
+				ui.Text(c, fmt.Sprintf("Click 'Enumerate Subdomains' to discover subdomains of %s.", apex)).
 					FontSize(app.fs(12)).
 					TextColor(t.TextMuted)
 			} else {
@@ -3014,7 +3014,7 @@ func (app *DesktopApp) renderSubdomainEnumerationCard(c *ui.Context, t *ui.Theme
 
 func (app *DesktopApp) renderPingAndTracerouteCards(c *ui.Context, t *ui.Theme, scanID int64, target string, ping *analyzer.PingResult, trace *analyzer.TracerouteResult) {
 	// Ping Section
-	app.renderSectionCard(c, t, "Ping & Latency Check", func() {
+	app.renderSectionCard(c, t, "Ping & Latency", func() {
 		ui.Row(c).FillWidth().Gap(10).AlignItems(ui.Center).Wrap().Children(func() {
 			pingBtnLabel := "Run Ping"
 			if ping != nil {
@@ -3025,7 +3025,7 @@ func (app *DesktopApp) renderPingAndTracerouteCards(c *ui.Context, t *ui.Theme, 
 			}
 
 			if ping == nil {
-				ui.Text(c, "Click 'Run Ping' to measure packet loss and round-trip latency.").
+				ui.Text(c, "Click 'Run Ping' to measure packet loss and latency.").
 					FontSize(app.fs(12)).
 					TextColor(t.TextMuted)
 			} else {
@@ -3074,7 +3074,7 @@ func (app *DesktopApp) renderPingAndTracerouteCards(c *ui.Context, t *ui.Theme, 
 	})
 
 	// Traceroute Section
-	app.renderSectionCard(c, t, "Traceroute & Network Path", func() {
+	app.renderSectionCard(c, t, "Traceroute", func() {
 		ui.Row(c).FillWidth().Gap(10).AlignItems(ui.Center).Wrap().Children(func() {
 			traceBtnLabel := "Run Traceroute"
 			if trace != nil {
@@ -3085,7 +3085,7 @@ func (app *DesktopApp) renderPingAndTracerouteCards(c *ui.Context, t *ui.Theme, 
 			}
 
 			if trace == nil {
-				ui.Text(c, "Click 'Run Traceroute' to map network hops and intermediate routers to this target.").
+				ui.Text(c, "Click 'Run Traceroute' to map network hops to this target.").
 					FontSize(app.fs(12)).
 					TextColor(t.TextMuted)
 			} else {
@@ -3138,18 +3138,18 @@ func (app *DesktopApp) renderPingAndTracerouteCards(c *ui.Context, t *ui.Theme, 
 }
 
 func (app *DesktopApp) renderReputationCard(c *ui.Context, t *ui.Theme, scanID int64, target string, isIP bool, rep *analyzer.ReputationResult) {
-	app.renderSectionCard(c, t, "DNSBL / Reputation & Blacklist Check (Spamhaus, Barracuda, SORBS, SpamCop, SURBL, URIBL)", func() {
+	app.renderSectionCard(c, t, "Reputation and Blacklist Status", func() {
 		ui.Row(c).FillWidth().Gap(10).AlignItems(ui.Center).Wrap().Children(func() {
-			btnLabel := "Check Blacklists (DNSBL)"
+			btnLabel := "Check Reputation"
 			if rep != nil && rep.Checked {
-				btnLabel = "Re-check Blacklists ↻"
+				btnLabel = "Re-check Reputation ↻"
 			}
 			if ui.PrimaryButton(c, btnLabel).Disabled(app.scanning).Clicked() {
 				app.StartReputationCheck(scanID)
 			}
 
 			if rep == nil {
-				ui.Text(c, "Click 'Check Blacklists (DNSBL)' to query domain and IP reputation across major spam, malware, and abuse blocklists.").
+				ui.Text(c, "Click 'Check Reputation' to query spam and malware blocklists.").
 					FontSize(app.fs(12)).
 					TextColor(t.TextMuted)
 			} else {
@@ -3186,37 +3186,43 @@ func (app *DesktopApp) renderReputationCard(c *ui.Context, t *ui.Theme, scanID i
 			return
 		}
 
-		// Render DNSBL provider badges/rows (progressive disclosure when all clean)
-		initialLimit := len(rep.Entries)
-		if rep.ListedCount == 0 && len(rep.Entries) > 4 {
-			initialLimit = 4
-		}
-		app.renderTruncatedList(c, t, fmt.Sprintf("dnsbl-list:%d", scanID), len(rep.Entries), initialLimit, "DNSBL Providers", func(count int) {
-			ui.Row(c).FillWidth().Gap(8).AlignItems(ui.Center).Wrap().Children(func() {
-				for i := 0; i < count; i++ {
-					entry := rep.Entries[i]
-					borderCol := t.Border
-					statusBadge := "CLEAN"
-					entryTone := toneSuccess
-					if entry.Listed {
-						borderCol = t.Danger
-						statusBadge = "LISTED"
-						entryTone = toneDanger
-					}
-					ui.Box(c).Key("dnsbl:"+entry.Zone+":"+entry.Target).PaddingX(8).PaddingY(6).Radius(6).Border(1, borderCol).Children(func() {
-						ui.Column(c).Gap(3).Children(func() {
-							ui.Row(c).Gap(6).AlignItems(ui.Center).Children(func() {
-								ui.Text(c, entry.Provider).FontSize(app.fs(12)).Bold()
+		// Render DNSBL provider cards styled similarly to HTTP Security Headers (responsive grid, left accent border, status pill)
+		ui.Row(c).FillWidth().Gap(8).AlignItems(ui.Center).Wrap().Children(func() {
+			for _, e := range rep.Entries {
+				entry := e
+				borderCol := t.Success
+				statusBadge := "CLEAN"
+				entryTone := toneSuccess
+				if entry.Listed {
+					borderCol = t.Danger
+					statusBadge = "LISTED"
+					entryTone = toneDanger
+				}
+				ui.Box(c).
+					Key(fmt.Sprintf("dnsbl:%d:%s:%s", scanID, entry.Zone, entry.Target)).
+					Grow(1).
+					MinWidth(205).
+					Padding(8).
+					Radius(6).
+					Background(t.Background).
+					Border(1, borderCol).
+					BorderStartWidth(3).
+					Children(func() {
+						ui.Column(c).FillWidth().Gap(4).Children(func() {
+							ui.Row(c).FillWidth().Gap(6).AlignItems(ui.Center).Children(func() {
+								ui.Text(c, entry.Provider).FontSize(app.fs(12)).Bold().MaxLines(1).Ellipsis("...")
+								ui.Spacer(c)
 								app.renderStatusPill(c, t, statusBadge, entryTone)
 							})
-							ui.Text(c, fmt.Sprintf("%s (%s)", entry.Zone, entry.Category)).FontSize(app.fs(10)).TextColor(t.TextMuted)
+							ui.Text(c, entry.Zone).Font("monospace").FontSize(app.fs(11)).TextColor(t.TextMuted).MaxLines(1).Ellipsis("...")
 							if entry.Listed && entry.Reason != "" {
 								ui.Text(c, entry.Reason).FontSize(app.fs(11)).TextColor(t.Danger).Selectable()
+							} else {
+								ui.Text(c, entry.Category).FontSize(app.fs(11)).TextColor(t.TextMuted).MaxLines(1).Ellipsis("...")
 							}
 						})
 					})
-				}
-			})
+			}
 		})
 	})
 }
@@ -3224,18 +3230,18 @@ func (app *DesktopApp) renderReputationCard(c *ui.Context, t *ui.Theme, scanID i
 func (app *DesktopApp) renderZoneAuditCard(c *ui.Context, t *ui.Theme, scanID int64, info *analyzer.DomainInfo) {
 	za := info.ZoneAudit
 
-	app.renderSectionCard(c, t, "DNSSEC, SOA, IPv6 (AAAA) & Zone Transfer (AXFR) Audit", func() {
+	app.renderSectionCard(c, t, "DNSSEC & Zone Audit", func() {
 		ui.Row(c).FillWidth().Gap(10).AlignItems(ui.Center).Wrap().Children(func() {
-			btnLabel := "Audit DNSSEC & Zone"
+			btnLabel := "Audit DNSSEC"
 			if za != nil && za.Audited {
-				btnLabel = "Re-audit Zone ↻"
+				btnLabel = "Re-audit DNSSEC ↻"
 			}
 			if ui.PrimaryButton(c, btnLabel).Disabled(app.scanning).Clicked() {
 				app.StartZoneAudit(scanID)
 			}
 
 			if za == nil {
-				ui.Text(c, "Click 'Audit DNSSEC & Zone' to verify DNSSEC chain of trust (DS/DNSKEY/RRSIG), SOA timers, IPv6 AAAA parity, and open AXFR zone transfers.").
+				ui.Text(c, "Click 'Audit DNSSEC' to verify DNSSEC records, SOA timers, IPv6 parity, and zone transfer security.").
 					FontSize(app.fs(12)).
 					TextColor(t.TextMuted)
 			} else {
@@ -3270,7 +3276,7 @@ func (app *DesktopApp) renderZoneAuditCard(c *ui.Context, t *ui.Theme, scanID in
 		ui.Box(c).FillWidth().Padding(8).Radius(6).Border(1, t.Border).Children(func() {
 			ui.Column(c).FillWidth().Gap(6).Children(func() {
 				ui.Row(c).FillWidth().Gap(8).AlignItems(ui.Center).Wrap().Children(func() {
-					ui.Text(c, "IPv6 (AAAA) Dual-Stack Parity").FontSize(app.fs(13)).Bold()
+					ui.Text(c, "IPv6 (AAAA)").FontSize(app.fs(13)).Bold()
 					if za.HasIPv6 {
 						app.renderStatusPill(c, t, "DUAL-STACK (IPv4 + IPv6)", toneSuccess)
 					} else {
@@ -3295,7 +3301,7 @@ func (app *DesktopApp) renderZoneAuditCard(c *ui.Context, t *ui.Theme, scanID in
 		ui.Box(c).FillWidth().Padding(8).Radius(6).Border(1, t.Border).Children(func() {
 			ui.Column(c).FillWidth().Gap(6).Children(func() {
 				ui.Row(c).FillWidth().Gap(8).AlignItems(ui.Center).Wrap().Children(func() {
-					ui.Text(c, "DNSSEC Chain of Trust (DS, DNSKEY, RRSIG)").FontSize(app.fs(13)).Bold()
+					ui.Text(c, "DNSSEC Validation").FontSize(app.fs(13)).Bold()
 					dnssecPillTone := toneWarning
 					if za.DNSSECEnabled {
 						dnssecPillTone = toneSuccess
@@ -3316,8 +3322,8 @@ func (app *DesktopApp) renderZoneAuditCard(c *ui.Context, t *ui.Theme, scanID in
 				if len(za.DSRecords) > 0 || len(za.DNSKEYRecords) > 0 {
 					dnssecKey := fmt.Sprintf("dnssec-keys:%d", scanID)
 					app.renderCollapsibleBlock(c, t, dnssecKey,
-						fmt.Sprintf("▸ Show Cryptographic DS & DNSKEY Records (%d DS, %d DNSKEY)", len(za.DSRecords), len(za.DNSKEYRecords)),
-						"▾ Hide Cryptographic DS & DNSKEY Records",
+						fmt.Sprintf("▸ Show Cryptographic Records (%d DS, %d DNSKEY)", len(za.DSRecords), len(za.DNSKEYRecords)),
+						"▾ Hide Cryptographic Records",
 						func() {
 							ui.Column(c).FillWidth().Gap(6).Children(func() {
 								if len(za.DSRecords) > 0 {
@@ -3358,7 +3364,7 @@ func (app *DesktopApp) renderZoneAuditCard(c *ui.Context, t *ui.Theme, scanID in
 			ui.Box(c).FillWidth().Padding(8).Radius(6).Border(1, t.Border).Children(func() {
 				ui.Column(c).FillWidth().Gap(6).Children(func() {
 					ui.Row(c).FillWidth().Gap(8).AlignItems(ui.Center).Wrap().Children(func() {
-						ui.Text(c, "Start of Authority (SOA) & Zone Timers").FontSize(app.fs(13)).Bold()
+						ui.Text(c, "SOA Timers").FontSize(app.fs(13)).Bold()
 						app.renderStatusPill(c, t, fmt.Sprintf("Serial: %d", za.SOA.Serial), toneInfo)
 					})
 
@@ -3384,7 +3390,7 @@ func (app *DesktopApp) renderZoneAuditCard(c *ui.Context, t *ui.Theme, scanID in
 			ui.Box(c).FillWidth().Padding(8).Radius(6).Border(1, borderCol).Children(func() {
 				ui.Column(c).FillWidth().Gap(6).Children(func() {
 					ui.Row(c).FillWidth().Gap(8).AlignItems(ui.Center).Wrap().Children(func() {
-						ui.Text(c, "Authoritative Zone Transfer (AXFR) Security Check").FontSize(app.fs(13)).Bold()
+						ui.Text(c, "Zone Transfer (AXFR)").FontSize(app.fs(13)).Bold()
 						if za.AXFRVulnerable {
 							app.renderStatusPill(c, t, "VULNERABLE (OPEN AXFR)", toneDanger)
 						} else {
@@ -3467,11 +3473,11 @@ func (app *DesktopApp) renderEmailAuthCard(c *ui.Context, t *ui.Theme, scanID in
 	}
 	email := info.Email
 
-	app.renderSectionCard(c, t, "Email Deliverability & Authentication (SPF, DMARC, DKIM, MTA-STS, TLS-RPT, BIMI)", func() {
+	app.renderSectionCard(c, t, "Email Authentication", func() {
 		ui.Row(c).FillWidth().Gap(10).AlignItems(ui.Center).Wrap().Children(func() {
-			btnLabel := "Audit Email Auth"
+			btnLabel := "Audit Email"
 			if email.DeepChecked {
-				btnLabel = "Re-audit Email Auth ↻"
+				btnLabel = "Re-audit Email ↻"
 			}
 			if ui.PrimaryButton(c, btnLabel).Disabled(app.scanning).Clicked() {
 				app.StartEmailDeepDive(scanID)
@@ -3564,7 +3570,7 @@ func (app *DesktopApp) renderEmailAuthCard(c *ui.Context, t *ui.Theme, scanID in
 		ui.Box(c).FillWidth().Padding(8).Radius(6).Border(1, t.Border).Children(func() {
 			ui.Column(c).FillWidth().Gap(6).Children(func() {
 				ui.Row(c).FillWidth().Gap(8).AlignItems(ui.Center).Wrap().Children(func() {
-					ui.Text(c, "DKIM Selectors (DomainKeys Identified Mail)").FontSize(app.fs(13)).Bold()
+					ui.Text(c, "DKIM Selectors").FontSize(app.fs(13)).Bold()
 					if len(email.DKIMRecords) > 0 {
 						app.renderStatusPill(c, t, fmt.Sprintf("%d ACTIVE SELECTORS", len(email.DKIMRecords)), toneSuccess)
 					} else {
@@ -3604,7 +3610,7 @@ func (app *DesktopApp) renderEmailAuthCard(c *ui.Context, t *ui.Theme, scanID in
 		ui.Box(c).FillWidth().Padding(8).Radius(6).Border(1, t.Border).Children(func() {
 			ui.Column(c).FillWidth().Gap(6).Children(func() {
 				ui.Row(c).FillWidth().Gap(8).AlignItems(ui.Center).Wrap().Children(func() {
-					ui.Text(c, "MTA-STS (RFC 8461) & SMTP TLS Reporting (RFC 8460)").FontSize(app.fs(13)).Bold()
+					ui.Text(c, "MTA-STS & TLS-RPT").FontSize(app.fs(13)).Bold()
 					if email.MTASTS != nil && email.MTASTS.Found {
 						app.renderStatusPill(c, t, "MTA-STS: PRESENT", toneSuccess)
 						if email.MTASTS.Mode != "" {
@@ -3662,7 +3668,7 @@ func (app *DesktopApp) renderEmailAuthCard(c *ui.Context, t *ui.Theme, scanID in
 		ui.Box(c).FillWidth().Padding(8).Radius(6).Border(1, t.Border).Children(func() {
 			ui.Column(c).FillWidth().Gap(6).Children(func() {
 				ui.Row(c).FillWidth().Gap(8).AlignItems(ui.Center).Wrap().Children(func() {
-					ui.Text(c, "BIMI (Brand Indicators for Message Identification)").FontSize(app.fs(13)).Bold()
+					ui.Text(c, "BIMI").FontSize(app.fs(13)).Bold()
 					if email.BIMI != nil && email.BIMI.Found {
 						app.renderStatusPill(c, t, "PRESENT", toneSuccess)
 					} else {
@@ -3724,7 +3730,7 @@ func (app *DesktopApp) renderPivotsTab(c *ui.Context, t *ui.Theme, scanID int64)
 		}
 	}
 
-	app.renderSectionCard(c, t, "Discovered Domains & IP Addresses (Drill-Down / Pivoting)", func() {
+	app.renderSectionCard(c, t, "Discovered Targets", func() {
 		ui.Row(c).FillWidth().Gap(8).AlignItems(ui.Center).Wrap().Children(func() {
 			ui.Text(c, fmt.Sprintf("%d Total Targets:", len(app.currentPivots))).FontSize(app.fs(12)).Bold()
 			if domainCount > 0 {
@@ -3741,7 +3747,7 @@ func (app *DesktopApp) renderPivotsTab(c *ui.Context, t *ui.Theme, scanID int64)
 				app.renderStatusPill(c, t, fmt.Sprintf("%d Unscanned", unscanned), toneWarning)
 			}
 			ui.Spacer(c)
-			ui.Text(c, "Click 'Scan ↗' to drill down or 'View Scan ✓' to open saved scan.").
+			ui.Text(c, "Click 'Scan ↗' or 'View Scan ✓' to inspect a target.").
 				FontSize(app.fs(11)).
 				TextColor(t.TextMuted)
 		})

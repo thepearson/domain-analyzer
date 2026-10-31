@@ -405,6 +405,10 @@ func TestDesktopAppDrillDownAndFeatures(t *testing.T) {
 				Entries: []analyzer.DNSBLEntry{
 					{Provider: "Spamhaus DBL", Zone: "dbl.spamhaus.org", Category: "Domain URI RBL", Target: "example.co.nz", Listed: false},
 					{Provider: "Spamhaus ZEN", Zone: "zen.spamhaus.org", Category: "IP RBL", Target: "93.184.216.34", Listed: false},
+					{Provider: "SpamCop", Zone: "bl.spamcop.net", Category: "IP RBL", Target: "93.184.216.34", Listed: false},
+					{Provider: "Barracuda RBL", Zone: "b.barracudacentral.org", Category: "IP RBL", Target: "93.184.216.34", Listed: false},
+					{Provider: "SORBS Aggregate", Zone: "dnsbl.sorbs.net", Category: "IP RBL", Target: "93.184.216.34", Listed: false},
+					{Provider: "UCEPROTECT L1", Zone: "dnsbl-1.uceprotect.net", Category: "IP RBL", Target: "93.184.216.34", Listed: false},
 				},
 				ExternalLinks: analyzer.BuildExternalReputationLinks(target, false),
 			}
@@ -428,18 +432,18 @@ func TestDesktopAppDrillDownAndFeatures(t *testing.T) {
 	if !tester.HasText("portal.example.co.nz") {
 		t.Fatalf("expected UI to render seeded domain 'portal.example.co.nz'")
 	}
-	if !tester.HasText("Open Full .nz WHOIS (DNC) ↗") {
+	if !tester.HasText("Open .nz WHOIS ↗") {
 		t.Errorf("expected UI to render DNC .nz WHOIS link on Summary & Reputation sub-tab")
 	}
 
-	// Verify Executive Scorecard tiles are displayed at the top and clicking "TLS, WAF & WEB" jumps to Web, TLS & WAF sub-tab
-	if !tester.HasText("REPUTATION & WHOIS") || !tester.HasText("TLS, WAF & WEB") || !tester.HasText("EMAIL SECURITY") {
+	// Verify Executive Scorecard tiles are displayed at the top and clicking "WEB & TLS" jumps to Web, TLS & WAF sub-tab
+	if !tester.HasText("REPUTATION") || !tester.HasText("WEB & TLS") || !tester.HasText("EMAIL") {
 		t.Errorf("expected Executive Scorecard KPI tiles to be rendered")
 	}
-	if err := tester.Click("TLS, WAF & WEB"); err != nil {
-		t.Fatalf("clicking 'TLS, WAF & WEB' scorecard tile failed: %v", err)
+	if err := tester.Click("WEB & TLS"); err != nil {
+		t.Fatalf("clicking 'WEB & TLS' scorecard tile failed: %v", err)
 	}
-	if !tester.HasText("OWASP XSS Challenge ↗") {
+	if !tester.HasText("XSS Probe ↗") {
 		t.Errorf("expected UI to render OWASP XSS Challenge link on Web, TLS & WAF sub-tab")
 	}
 	if !tester.HasText("Cloudflare ↗") {
@@ -452,9 +456,9 @@ func TestDesktopAppDrillDownAndFeatures(t *testing.T) {
 		t.Errorf("expected HTTP Security Headers Checklist grid with '2/6 Configured' pill to be rendered")
 	}
 
-	// Switch back to "REPUTATION & WHOIS"
-	if err := tester.Click("REPUTATION & WHOIS"); err != nil {
-		t.Fatalf("clicking 'REPUTATION & WHOIS' tile failed: %v", err)
+	// Switch back to "REPUTATION"
+	if err := tester.Click("REPUTATION"); err != nil {
+		t.Fatalf("clicking 'REPUTATION' tile failed: %v", err)
 	}
 
 	// Test adjusting text size up and down in the GUI
@@ -525,8 +529,8 @@ func TestDesktopAppDrillDownAndFeatures(t *testing.T) {
 	}
 
 	// Switch to Discovered Targets view and verify compact pivot row summary
-	if err := tester.Click("TARGETS DISCOVERED"); err != nil {
-		t.Fatalf("clicking 'TARGETS DISCOVERED' tile failed: %v", err)
+	if err := tester.Click("TARGETS"); err != nil {
+		t.Fatalf("clicking 'TARGETS' tile failed: %v", err)
 	}
 	if !tester.HasText("Total Targets:") || !tester.HasText("example.co.nz") {
 		t.Errorf("expected Discovered Targets summary and apex domain pivot row to be rendered")
@@ -558,12 +562,12 @@ func TestDesktopAppDrillDownAndFeatures(t *testing.T) {
 		t.Errorf("expected child scan tree indicator '└─' in sidebar")
 	}
 
-	// Switch to "PORTS & PING" on the IP scan and run a host port scan
-	if err := tester.Click("PORTS & PING"); err != nil {
-		t.Fatalf("clicking 'PORTS & PING' tile on IP scan failed: %v", err)
+	// Switch to "PORTS" on the IP scan and run a host port scan
+	if err := tester.Click("PORTS"); err != nil {
+		t.Fatalf("clicking 'PORTS' tile on IP scan failed: %v", err)
 	}
-	if err := tester.Click("Scan Host Ports"); err != nil {
-		t.Fatalf("clicking 'Scan Host Ports' failed: %v", err)
+	if err := tester.Click("Scan Ports"); err != nil {
+		t.Fatalf("clicking 'Scan Ports' failed: %v", err)
 	}
 	select {
 	case <-portDoneCh:
@@ -588,9 +592,9 @@ func TestDesktopAppDrillDownAndFeatures(t *testing.T) {
 		t.Errorf("expected parent scan JSON export to include child IP scan and port scan data, got:\n%s", app.rawJSONReadOnly)
 	}
 
-	// Switch to "REACHABILITY" on the domain scan and run Ping and Traceroute
-	if err := tester.Click("REACHABILITY"); err != nil {
-		t.Fatalf("clicking 'REACHABILITY' tile failed: %v", err)
+	// Switch to "NETWORK" on the domain scan and run Ping and Traceroute
+	if err := tester.Click("NETWORK"); err != nil {
+		t.Fatalf("clicking 'NETWORK' tile failed: %v", err)
 	}
 	if err := tester.Click("Run Ping"); err != nil {
 		t.Fatalf("clicking 'Run Ping' failed: %v", err)
@@ -624,8 +628,8 @@ func TestDesktopAppDrillDownAndFeatures(t *testing.T) {
 	if err := tester.Click("DNS & ZONE"); err != nil {
 		t.Fatalf("clicking 'DNS & ZONE' tile failed: %v", err)
 	}
-	if err := tester.Click("Audit DNSSEC & Zone"); err != nil {
-		t.Fatalf("clicking 'Audit DNSSEC & Zone' failed: %v", err)
+	if err := tester.Click("Audit DNSSEC"); err != nil {
+		t.Fatalf("clicking 'Audit DNSSEC' failed: %v", err)
 	}
 	select {
 	case <-zoneDoneCh:
@@ -638,7 +642,7 @@ func TestDesktopAppDrillDownAndFeatures(t *testing.T) {
 		t.Errorf("expected DNSSEC status, IPv6 AAAA address, and AXFR status badge to be rendered on scan page")
 	}
 	// Verify progressive disclosure toggle for DNSSEC DS/DNSKEY cryptographic records
-	if err := tester.Click("▸ Show Cryptographic DS & DNSKEY Records (1 DS, 1 DNSKEY)"); err != nil {
+	if err := tester.Click("▸ Show Cryptographic Records (1 DS, 1 DNSKEY)"); err != nil {
 		t.Fatalf("clicking DNSSEC DS/DNSKEY progressive disclosure toggle failed: %v", err)
 	}
 	if !tester.HasText("1F9876543210ABCDEF") {
@@ -659,12 +663,12 @@ func TestDesktopAppDrillDownAndFeatures(t *testing.T) {
 		t.Errorf("expected discovered subdomains to be rendered on scan page")
 	}
 
-	// Switch to "TLS, WAF & WEB" and run TLS Audit, CVE Check, HTTP Trace, and Metadata Inspection
-	if err := tester.Click("TLS, WAF & WEB"); err != nil {
-		t.Fatalf("clicking 'TLS, WAF & WEB' tile failed: %v", err)
+	// Switch to "WEB & TLS" and run TLS Audit, CVE Check, HTTP Trace, and Metadata Inspection
+	if err := tester.Click("WEB & TLS"); err != nil {
+		t.Fatalf("clicking 'WEB & TLS' tile failed: %v", err)
 	}
-	if err := tester.Click("Audit TLS & Ciphers"); err != nil {
-		t.Fatalf("clicking 'Audit TLS & Ciphers' failed: %v", err)
+	if err := tester.Click("Audit TLS"); err != nil {
+		t.Fatalf("clicking 'Audit TLS' failed: %v", err)
 	}
 	select {
 	case <-tlsDoneCh:
@@ -691,8 +695,8 @@ func TestDesktopAppDrillDownAndFeatures(t *testing.T) {
 		t.Errorf("expected CVE-2024-99999 and '1 CVEs Found' badge to be rendered in Web Technologies section")
 	}
 
-	if err := tester.Click("Trace Redirects & Timing"); err != nil {
-		t.Fatalf("clicking 'Trace Redirects & Timing' failed: %v", err)
+	if err := tester.Click("Trace Redirects"); err != nil {
+		t.Fatalf("clicking 'Trace Redirects' failed: %v", err)
 	}
 	select {
 	case <-httpDoneCh:
@@ -719,12 +723,12 @@ func TestDesktopAppDrillDownAndFeatures(t *testing.T) {
 		t.Errorf("expected robots.txt disallow path and security.txt contact to be rendered on scan page")
 	}
 
-	// Switch to "EMAIL SECURITY" and run Email Deliverability & Authentication Deep-Dive
-	if err := tester.Click("EMAIL SECURITY"); err != nil {
-		t.Fatalf("clicking 'EMAIL SECURITY' tile failed: %v", err)
+	// Switch to "EMAIL" and run Email Deliverability & Authentication Deep-Dive
+	if err := tester.Click("EMAIL"); err != nil {
+		t.Fatalf("clicking 'EMAIL' tile failed: %v", err)
 	}
-	if err := tester.Click("Audit Email Auth"); err != nil {
-		t.Fatalf("clicking 'Audit Email Auth' failed: %v", err)
+	if err := tester.Click("Audit Email"); err != nil {
+		t.Fatalf("clicking 'Audit Email' failed: %v", err)
 	}
 	select {
 	case <-emailDoneCh:
@@ -744,12 +748,12 @@ func TestDesktopAppDrillDownAndFeatures(t *testing.T) {
 		t.Errorf("expected raw SPF TXT string to be visible after clicking '▸ Show Raw SPF TXT Record'")
 	}
 
-	// Switch to "REPUTATION & WHOIS" and run DNSBL / Reputation & Blacklist Check
-	if err := tester.Click("REPUTATION & WHOIS"); err != nil {
-		t.Fatalf("clicking 'REPUTATION & WHOIS' tile failed: %v", err)
+	// Switch to "REPUTATION" and run DNSBL / Reputation & Blacklist Check
+	if err := tester.Click("REPUTATION"); err != nil {
+		t.Fatalf("clicking 'REPUTATION' tile failed: %v", err)
 	}
-	if err := tester.Click("Check Blacklists (DNSBL)"); err != nil {
-		t.Fatalf("clicking 'Check Blacklists (DNSBL)' failed: %v", err)
+	if err := tester.Click("Check Reputation"); err != nil {
+		t.Fatalf("clicking 'Check Reputation' failed: %v", err)
 	}
 	select {
 	case <-repDoneCh:
@@ -758,13 +762,16 @@ func TestDesktopAppDrillDownAndFeatures(t *testing.T) {
 	}
 	time.Sleep(50 * time.Millisecond)
 	tester.Frame()
-	if !tester.HasText("Clean (0/12 Blacklists)") || !tester.HasText("Spamhaus DBL") || !tester.HasText("Google Safe Browsing ↗") {
-		t.Errorf("expected Clean (0/12 Blacklists) badge, Spamhaus DBL card, and Google Safe Browsing link to be rendered")
+	if !tester.HasText("Clean (0/12 Blacklists)") || !tester.HasText("Spamhaus DBL") || !tester.HasText("UCEPROTECT L1") || !tester.HasText("Google Safe Browsing ↗") {
+		t.Errorf("expected Clean (0/12 Blacklists) badge, Spamhaus DBL card, UCEPROTECT L1 card (no truncation), and Google Safe Browsing link to be rendered")
+	}
+	if tester.HasText("Show All") {
+		t.Errorf("expected all reputation cards to be visible without 'Show All' truncation toggle button")
 	}
 
-	// Test clicking "TARGETS DISCOVERED" Executive Scorecard tile to switch to Discovered Targets sub-tab
-	if err := tester.Click("TARGETS DISCOVERED"); err != nil {
-		t.Fatalf("clicking 'TARGETS DISCOVERED' scorecard tile failed: %v", err)
+	// Test clicking "TARGETS" Executive Scorecard tile to switch to Discovered Targets sub-tab
+	if err := tester.Click("TARGETS"); err != nil {
+		t.Fatalf("clicking 'TARGETS' scorecard tile failed: %v", err)
 	}
 	if app.domainCategoryTab != DomainTabTargets {
 		t.Errorf("expected domainCategoryTab to be DomainTabTargets (5), got %d", app.domainCategoryTab)
