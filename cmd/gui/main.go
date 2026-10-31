@@ -41,10 +41,10 @@ func main() {
 
 	mygo.App.WhenReady(func() {
 		win := mygo.NewWindow(mygo.WindowOptions{
-			Title:    "Domain Analyzer — Reconnaissance & Pivot Explorer",
+			Title:    "ReconnaScan — Reconnaissance & Pivot Explorer",
 			Width:    1280,
 			Height:   820,
-			StateKey: "domain-analyzer-main",
+			StateKey: "reconnascan-main",
 			Content:  ui.View(app.View),
 		})
 		app.SetWindow(win)

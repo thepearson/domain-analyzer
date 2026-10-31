@@ -67,11 +67,18 @@ func DefaultDBPath() (string, error) {
 	if err != nil || configDir == "" {
 		homeDir, err := os.UserHomeDir()
 		if err != nil {
-			return "domain-analyzer-scans.db", nil
+			return "reconnascan-scans.db", nil
 		}
 		configDir = filepath.Join(homeDir, ".config")
 	}
-	appDir := filepath.Join(configDir, "domain-analyzer")
+	appDir := filepath.Join(configDir, "reconnascan")
+	oldDir := filepath.Join(configDir, "domain-analyzer")
+	if _, err := os.Stat(appDir); os.IsNotExist(err) {
+		if _, errOld := os.Stat(oldDir); errOld == nil {
+			// Migrate/reuse existing directory if reconnascan doesn't exist yet
+			appDir = oldDir
+		}
+	}
 	if err := os.MkdirAll(appDir, 0o755); err != nil {
 		return "", fmt.Errorf("creating config dir: %w", err)
 	}
@@ -848,18 +855,23 @@ func (s *Store) ExportSession() ([]byte, error) {
 }
 
 // ExportSessionToFile exports all scans to a specified file path.
+// If the filePath has no extension, ".rscan" is appended automatically.
 func (s *Store) ExportSessionToFile(filePath string) error {
+	targetPath := filePath
+	if filepath.Ext(targetPath) == "" {
+		targetPath += ".rscan"
+	}
 	data, err := s.ExportSession()
 	if err != nil {
 		return err
 	}
-	dir := filepath.Dir(filePath)
+	dir := filepath.Dir(targetPath)
 	if dir != "" && dir != "." {
 		if err := os.MkdirAll(dir, 0o755); err != nil {
 			return fmt.Errorf("creating directory for session export: %w", err)
 		}
 	}
-	return os.WriteFile(filePath, data, 0o644)
+	return os.WriteFile(targetPath, data, 0o644)
 }
 
 // ImportSession reads and deserializes session JSON data, importing scans while preserving parent-child trees and mapping IDs.
@@ -901,9 +913,15 @@ func (s *Store) ImportSession(data []byte) (int, error) {
 	return importedCount, nil
 }
 
-// ImportSessionFromFile loads and imports scans from a JSON session file.
+// ImportSessionFromFile loads and imports scans from a .rscan session file.
 func (s *Store) ImportSessionFromFile(filePath string) (int, error) {
-	data, err := os.ReadFile(filePath)
+	targetPath := filePath
+	if _, err := os.Stat(targetPath); os.IsNotExist(err) && filepath.Ext(targetPath) == "" {
+		if _, errRscan := os.Stat(targetPath + ".rscan"); errRscan == nil {
+			targetPath += ".rscan"
+		}
+	}
+	data, err := os.ReadFile(targetPath)
 	if err != nil {
 		return 0, fmt.Errorf("reading session file: %w", err)
 	}

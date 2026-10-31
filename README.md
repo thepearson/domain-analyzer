@@ -1,6 +1,6 @@
-# Domain Analyzer
+# ReconnaScan
 
-`domain-analyzer` is a rapid domain reconnaissance tool written in Go. it aggregates information from multiple sources to provide a comprehensive view of a domain's status, infrastructure, and technology stack.
+`ReconnaScan` (`rscan` / `rscan-ui`) is a rapid domain and infrastructure reconnaissance tool written in Go. It aggregates information from multiple sources to provide a comprehensive view of a domain or IP's status, infrastructure, and technology stack.
 
 ## Example
 
@@ -80,48 +80,49 @@ HTTP Probe Status  Baseline: 200, WAF Trigger: 200
 ### From Source
 
 ```bash
-git clone https://github.com/yourusername/domain-analyzer.git
-cd domain-analyzer
+git clone https://github.com/yourusername/reconnascan.git
+cd reconnascan
 
-# Build the CLI tool
-go build -o domain-analyzer ./cmd/cli
+# Build the CLI tool (rscan)
+go build -o rscan ./cmd/cli
 
-# Build the Native Desktop GUI (MyGo + SQLite)
-go build -o domain-analyzer-gui ./cmd/gui
+# Build the Native Desktop GUI (rscan-ui)
+go build -o rscan-ui ./cmd/gui
 ```
 
-## Native Desktop UI (`domain-analyzer-gui`)
+## Native Desktop UI (`rscan-ui`)
 
 The native GPU-accelerated desktop app (built with `github.com/egoist/mygo/ui` and `modernc.org/sqlite`) retains all scans persistently across sessions and lets you interactively drill down into discovered entities:
 
-- **Persistent Scan History**: Automatically saves all domain and IP scans to a local SQLite database (`~/.config/domain-analyzer/scans.db` on Linux) with instant search/filtering.
+- **Persistent Scan History**: Automatically saves all domain and IP scans to a local SQLite database (`~/.config/reconnascan/scans.db` on Linux) with instant search/filtering.
+- **Portable Sessions (`.rscan`)**: Export and import full scan sessions and target drill-down trees to/from portable `.rscan` files.
 - **One-Click Drill-Down (Pivoting)**: Click **`Scan Domain ↗`** or **`Scan IP ↗`** on any discovered entity—including `A` and `WWW` IP addresses, Apex domains, CNAME hops, TLS Certificate Subject Alternative Names (SANs), Reverse DNS (PTR) hostnames, Nameservers, and SPF `include:` domains.
-- **Lineage Tracking**: Tracks parent-to-child scan relationships so you can jump back via **`← Parent Scan`** or inspect all child scans under the **Child Scans** tab.
+- **Lineage Tracking**: Tracks parent-to-child scan relationships so you can jump back via **`← Parent Scan`** or inspect child scans in the hierarchy.
 
 ```bash
 # Launch the desktop UI
-./domain-analyzer-gui
+./rscan-ui
 
 # Or launch and immediately scan a target
-./domain-analyzer-gui example.com
+./rscan-ui example.com
 
 # Optional custom SQLite database path
-./domain-analyzer-gui -db ./project-scans.db
+./rscan-ui -db ./project-scans.db
 ```
 
-## CLI Usage
+## CLI Usage (`rscan`)
 
 Provide a domain name as a positional argument, or pipe multiple domains via stdin.
 
 ```bash
 # Basic usage (tabular output)
-./domain-analyzer google.com
+./rscan google.com
 
 # Bulk analysis via stdin
-cat domains.txt | ./domain-analyzer --format csv --output results.csv
+cat domains.txt | ./rscan --format csv --output results.csv
 
 # JSON output for multiple domains
-./domain-analyzer google.com apple.com --format json
+./rscan google.com apple.com --format json
 ```
 
 ### Options

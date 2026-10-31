@@ -1,6 +1,7 @@
 package storage
 
 import (
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -167,9 +168,18 @@ func TestStoreExportAndImportSession(t *testing.T) {
 		t.Fatalf("SaveIPScan failed: %v", err)
 	}
 
-	sessionFile := filepath.Join(tempDir, "exported_session.json")
+	sessionFile := filepath.Join(tempDir, "exported_session.rscan")
 	if err := store.ExportSessionToFile(sessionFile); err != nil {
 		t.Fatalf("ExportSessionToFile failed: %v", err)
+	}
+
+	// Also verify that exporting without extension automatically appends .rscan
+	noExtFile := filepath.Join(tempDir, "exported_no_ext")
+	if err := store.ExportSessionToFile(noExtFile); err != nil {
+		t.Fatalf("ExportSessionToFile(no ext) failed: %v", err)
+	}
+	if _, err := os.Stat(noExtFile + ".rscan"); err != nil {
+		t.Fatalf("expected .rscan file to be created for %s, got err: %v", noExtFile+".rscan", err)
 	}
 
 	// Open a fresh database and import the session file

@@ -1078,7 +1078,7 @@ func (app *DesktopApp) View(c *ui.Context) {
 
 func (app *DesktopApp) renderTopBar(c *ui.Context, t *ui.Theme) {
 	ui.Row(c).FillWidth().Padding(12).Gap(10).AlignItems(ui.Center).Background(t.Surface).Children(func() {
-		ui.Text(c, "Domain Analyzer").FontSize(app.fs(17)).Bold()
+		ui.Text(c, "ReconnaScan").FontSize(app.fs(17)).Bold()
 
 		inp := ui.TextInput(c, &app.targetInput).
 			Placeholder("Enter domain (e.g. example.com) or IP (e.g. 93.184.216.34)...").
@@ -1100,20 +1100,20 @@ func (app *DesktopApp) renderTopBar(c *ui.Context, t *ui.Theme) {
 		}
 
 		// Session File Management (Open Session / Save Session)
-		if ui.Button(c, "Open Session 📁").Tooltip("Load a saved reconnaissance session from file").Clicked() {
+		if ui.Button(c, "Open Session 📁").Tooltip("Load a saved reconnaissance session from file (.rscan)").Clicked() {
 			app.sessionModalOpen = true
 			app.sessionModalMode = 1
 			app.sessionModalError = ""
 			if app.sessionFilePath == "" {
-				app.sessionFilePath = "session.json"
+				app.sessionFilePath = "session.rscan"
 			}
 		}
-		if ui.Button(c, "Save Session 💾").Tooltip("Export current scan session to file").Clicked() {
+		if ui.Button(c, "Save Session 💾").Tooltip("Export current scan session to file (.rscan)").Clicked() {
 			app.sessionModalOpen = true
 			app.sessionModalMode = 0
 			app.sessionModalError = ""
 			if app.sessionFilePath == "" {
-				app.sessionFilePath = "session.json"
+				app.sessionFilePath = "session.rscan"
 			}
 		}
 
@@ -1168,17 +1168,17 @@ func (app *DesktopApp) renderSessionModal(c *ui.Context, t *ui.Theme) {
 					})
 
 					// Description
-					desc := "Export all saved scans, target trees, and reconnaissance history to a portable JSON session file."
+					desc := "Export all saved scans, target trees, and reconnaissance history to a portable .rscan session file."
 					if app.sessionModalMode == 1 {
-						desc = "Load and import scans from a previously exported session JSON file into your local database."
+						desc = "Load and import scans from a previously exported .rscan session file into your local database."
 					}
 					ui.Text(c, desc).FontSize(app.fs(12)).TextColor(t.TextMuted)
 
 					// File path input
 					ui.Column(c).FillWidth().Gap(4).Children(func() {
-						ui.Text(c, "Session File Path:").FontSize(app.fs(11)).Bold().TextColor(t.TextMuted)
+						ui.Text(c, "Session File Path (.rscan):").FontSize(app.fs(11)).Bold().TextColor(t.TextMuted)
 						inp := ui.TextInput(c, &app.sessionFilePath).
-							Placeholder("e.g. session.json or /path/to/session.json").
+							Placeholder("e.g. session.rscan or /path/to/session.rscan").
 							FillWidth()
 
 						if inp.Submitted() && strings.TrimSpace(app.sessionFilePath) != "" {
@@ -1321,14 +1321,6 @@ func (app *DesktopApp) renderSidebar(c *ui.Context, t *ui.Theme) {
 							ui.Column(c).FillWidth().Gap(4).Children(func() {
 								ui.Row(c).FillWidth().Gap(6).AlignItems(ui.Center).Wrap().Children(func() {
 									app.renderFavicon(c, scanItem.ID, scanItem.Favicon, 16)
-
-									typeBadge := "DOMAIN"
-									typeTone := toneInfo
-									if scanItem.TargetType == analyzer.TargetTypeIP {
-										typeBadge = "IP"
-										typeTone = toneNeutral
-									}
-									app.renderStatusPill(c, t, typeBadge, typeTone)
 									ui.Text(c, scanItem.Target).Bold().FontSize(app.fs(13))
 
 									if scanItem.ChildCount > 0 {
@@ -1396,13 +1388,6 @@ func (app *DesktopApp) renderDetailPane(c *ui.Context, t *ui.Theme) {
 			}
 
 			app.renderFavicon(c, scan.ID, scan.Favicon, 20)
-
-			badgeLabel := "DOMAIN SCAN"
-			badgeTone := toneInfo
-			if scan.TargetType == analyzer.TargetTypeIP {
-				badgeLabel = "IP SCAN"
-			}
-			app.renderStatusPill(c, t, badgeLabel, badgeTone)
 			ui.Text(c, scan.Target).FontSize(app.fs(20)).Bold().Selectable()
 
 			if scan.PivotReason != "" {
@@ -1484,12 +1469,6 @@ func (app *DesktopApp) renderPivotActionRow(c *ui.Context, t *ui.Theme, parentSc
 	}
 
 	isIP := analyzer.IsIPAddress(cleanTarget)
-	typeBadge := "DOMAIN"
-	typeTone := toneInfo
-	if isIP {
-		typeBadge = "IP"
-		typeTone = toneNeutral
-	}
 
 	borderCol := t.Border
 	if existingScanID > 0 {
@@ -1510,9 +1489,8 @@ func (app *DesktopApp) renderPivotActionRow(c *ui.Context, t *ui.Theme, parentSc
 				if label != "" {
 					ui.Text(c, label+":").FontSize(app.fs(11)).TextColor(t.TextMuted).MinWidth(110)
 				}
-				app.renderStatusPill(c, t, typeBadge, typeTone)
 				ui.Text(c, cleanTarget).FontSize(app.fs(13)).Bold().Selectable()
-				if reason != "" && reason != typeBadge {
+				if reason != "" && !strings.EqualFold(reason, "Domain") && !strings.EqualFold(reason, "IP") && !strings.EqualFold(reason, "IP Address") {
 					app.renderStatusPill(c, t, reason, toneInfo)
 				}
 				if directChildID > 0 {
@@ -3755,11 +3733,7 @@ func (app *DesktopApp) renderPivotsTab(c *ui.Context, t *ui.Theme, scanID int64)
 		ui.Column(c).FillWidth().Gap(4).Children(func() {
 			for _, pivot := range app.currentPivots {
 				p := pivot
-				typeLabel := "Domain"
-				if p.Type == analyzer.TargetTypeIP {
-					typeLabel = "IP Address"
-				}
-				app.renderPivotActionRow(c, t, scanID, typeLabel, p.Target, p.Reason)
+				app.renderPivotActionRow(c, t, scanID, "", p.Target, p.Reason)
 			}
 		})
 	})

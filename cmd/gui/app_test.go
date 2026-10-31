@@ -519,7 +519,7 @@ func TestDesktopAppDrillDownAndFeatures(t *testing.T) {
 	if err := tester.Click("Save Session 💾"); err != nil {
 		t.Fatalf("clicking 'Save Session 💾' failed: %v", err)
 	}
-	sessionTestFile := filepath.Join(t.TempDir(), "test_session_export.json")
+	sessionTestFile := filepath.Join(t.TempDir(), "test_session_export.rscan")
 	app.sessionFilePath = sessionTestFile
 	if err := tester.Click("Save Session"); err != nil {
 		t.Fatalf("clicking 'Save Session' confirm button failed: %v", err)

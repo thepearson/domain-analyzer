@@ -1,6 +1,6 @@
-# Project Overview: Domain Analyzer
+# Project Overview: ReconnaScan
 
-`domain-analyzer` is a Go-based command-line utility designed for rapid domain reconnaissance. It aggregates information from multiple sources to provide a comprehensive view of a domain's status, infrastructure, and technology stack.
+`ReconnaScan` (`rscan` / `rscan-ui`) is a Go-based command-line and native graphical utility designed for rapid domain and infrastructure reconnaissance. It aggregates information from multiple sources to provide a comprehensive view of a domain or IP's status, infrastructure, and technology stack.
 
 ## Main Technologies
 - **Language:** Go (v1.27+)
@@ -57,11 +57,18 @@ The project is structured into modular packages to ensure scalability and testab
 
 ### Build and Run
 ```bash
-go build -o domain-analyzer
-# Single domain
-./domain-analyzer <domain> [--format tabular|json|csv] [--output file] [--check-vulnerabilities]
+# Build CLI (rscan) and Desktop UI (rscan-ui)
+go build -o rscan ./cmd/cli
+go build -o rscan-ui ./cmd/gui
+
+# Single domain CLI
+./rscan <domain> [--format tabular|json|csv] [--output file] [--check-vulnerabilities]
+
 # Bulk analysis
-cat domains.txt | ./domain-analyzer --format csv --output scan_results.csv
+cat domains.txt | ./rscan --format csv --output scan_results.csv
+
+# Launch Desktop UI
+./rscan-ui [target]
 ```
 
 ## Development Conventions
