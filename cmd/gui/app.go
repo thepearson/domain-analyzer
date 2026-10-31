@@ -187,6 +187,7 @@ type DesktopApp struct {
 	faviconCache     map[int64]cachedFavicon
 	techFaviconCache map[string]cachedFavicon
 	techFetching     map[string]bool
+	expandedSections map[string]bool
 
 	mu sync.Mutex
 }
@@ -200,6 +201,7 @@ func NewDesktopApp(store *storage.Store) *DesktopApp {
 		faviconCache:     make(map[int64]cachedFavicon),
 		techFaviconCache: make(map[string]cachedFavicon),
 		techFetching:     make(map[string]bool),
+		expandedSections: make(map[string]bool),
 		runner: ScanRunnerFunc{
 			AnalyzeDomain:         analyzer.Analyze,
 			AnalyzeIP:             analyzer.AnalyzeIP,
@@ -1793,6 +1795,96 @@ func (app *DesktopApp) renderKeyValue(c *ui.Context, t *ui.Theme, key string, va
 	})
 }
 
+func (app *DesktopApp) isSectionExpanded(key string) bool {
+	if app.expandedSections == nil {
+		return false
+	}
+	return app.expandedSections[key]
+}
+
+func (app *DesktopApp) toggleSectionExpanded(key string) {
+	if app.expandedSections == nil {
+		app.expandedSections = make(map[string]bool)
+	}
+	app.expandedSections[key] = !app.expandedSections[key]
+}
+
+// renderCollapsibleBlock renders a progressive-disclosure toggle button that expands/collapses secondary details.
+func (app *DesktopApp) renderCollapsibleBlock(c *ui.Context, t *ui.Theme, key string, showLabel string, hideLabel string, children func()) {
+	expanded := app.isSectionExpanded(key)
+	btnLabel := showLabel
+	if expanded {
+		btnLabel = hideLabel
+	}
+	ui.Column(c).Key("collapse:" + key).FillWidth().Gap(6).Children(func() {
+		ui.Row(c).FillWidth().AlignItems(ui.Center).Children(func() {
+			if ui.Button(c, btnLabel).Clicked() {
+				app.toggleSectionExpanded(key)
+			}
+		})
+		if expanded {
+			children()
+		}
+	})
+}
+
+// renderCollapsibleRawRecord hides verbose DNS TXT / cryptographic strings behind a clean "Show Raw..." toggle + Copy button.
+func (app *DesktopApp) renderCollapsibleRawRecord(c *ui.Context, t *ui.Theme, key string, label string, raw string) {
+	trimmed := strings.TrimSpace(raw)
+	if trimmed == "" {
+		return
+	}
+	expanded := app.isSectionExpanded(key)
+	toggleLabel := "▸ Show Raw " + label
+	if expanded {
+		toggleLabel = "▾ Hide Raw " + label
+	}
+	ui.Column(c).Key("rawrec:" + key).FillWidth().Gap(4).Children(func() {
+		ui.Row(c).FillWidth().Gap(8).AlignItems(ui.Center).Wrap().Children(func() {
+			if ui.Button(c, toggleLabel).Clicked() {
+				app.toggleSectionExpanded(key)
+			}
+			if ui.Button(c, "Copy "+label).Clicked() {
+				c.WriteClipboard(trimmed)
+				c.Toast("Copied " + label + " to clipboard")
+			}
+		})
+		if expanded {
+			ui.Box(c).FillWidth().Padding(8).Radius(6).Background(t.Background).Border(1, t.Border).Children(func() {
+				ui.Text(c, trimmed).Font("monospace").FontSize(app.fs(11)).TextColor(t.Text).Selectable()
+			})
+		}
+	})
+}
+
+// renderTruncatedList shows up to initialLimit items by default and adds a "Show All N (+M more)" toggle when total > initialLimit.
+func (app *DesktopApp) renderTruncatedList(c *ui.Context, t *ui.Theme, key string, total int, initialLimit int, nounPlural string, renderRange func(count int)) {
+	if total <= 0 {
+		return
+	}
+	if total <= initialLimit || initialLimit <= 0 {
+		renderRange(total)
+		return
+	}
+	expanded := app.isSectionExpanded(key)
+	visibleCount := initialLimit
+	if expanded {
+		visibleCount = total
+	}
+	renderRange(visibleCount)
+
+	remaining := total - initialLimit
+	btnLabel := fmt.Sprintf("▸ Show All %d %s (+%d more)", total, nounPlural, remaining)
+	if expanded {
+		btnLabel = fmt.Sprintf("▾ Show Fewer %s (Top %d)", nounPlural, initialLimit)
+	}
+	ui.Row(c).FillWidth().PaddingY(2).AlignItems(ui.Center).Children(func() {
+		if ui.Button(c, btnLabel).Clicked() {
+			app.toggleSectionExpanded(key)
+		}
+	})
+}
+
 func (app *DesktopApp) renderDomainDetails(c *ui.Context, t *ui.Theme, scanID int64, info *analyzer.DomainInfo) {
 	switch app.domainCategoryTab {
 	case DomainTabSummary:
@@ -1889,17 +1981,24 @@ func (app *DesktopApp) renderDomainDetails(c *ui.Context, t *ui.Theme, scanID in
 			}
 
 			for _, prov := range info.WAF.Providers {
-				ui.Box(c).Key("wafprov:"+prov.Provider).FillWidth().Padding(8).Radius(6).Border(1, t.Border).Children(func() {
+				p := prov
+				ui.Box(c).Key("wafprov:"+p.Provider).FillWidth().Padding(8).Radius(6).Border(1, t.Border).Children(func() {
 					ui.Column(c).FillWidth().Gap(4).Children(func() {
 						ui.Row(c).Gap(6).AlignItems(ui.Center).Children(func() {
-							ui.Text(c, prov.Provider).Bold()
-							app.renderStatusPill(c, t, prov.State, wafStateTone(prov.State))
+							ui.Text(c, p.Provider).Bold()
+							app.renderStatusPill(c, t, p.State, wafStateTone(p.State))
 						})
-						if len(prov.Implementation) > 0 {
-							ui.Text(c, "Implementation: "+strings.Join(prov.Implementation, " | ")).FontSize(app.fs(12))
+						if len(p.Implementation) > 0 {
+							ui.Text(c, "Implementation: "+strings.Join(p.Implementation, " | ")).FontSize(app.fs(12))
 						}
-						if len(prov.Evidence) > 0 {
-							ui.Text(c, "Evidence: "+strings.Join(prov.Evidence, ", ")).FontSize(app.fs(11)).TextColor(t.TextMuted)
+						if len(p.Evidence) > 0 {
+							evKey := fmt.Sprintf("waf-ev:%d:%s", scanID, p.Provider)
+							app.renderCollapsibleBlock(c, t, evKey,
+								fmt.Sprintf("▸ Show Detection Evidence (%d)", len(p.Evidence)),
+								"▾ Hide Detection Evidence",
+								func() {
+									ui.Text(c, "Evidence: "+strings.Join(p.Evidence, ", ")).FontSize(app.fs(11)).TextColor(t.TextMuted).Selectable()
+								})
 						}
 					})
 				})
@@ -2274,19 +2373,31 @@ func (app *DesktopApp) renderTLSGradingCard(c *ui.Context, t *ui.Theme, scanID i
 		}
 
 		if len(tlsInfo.ChainSummary) > 0 {
-			ui.Text(c, fmt.Sprintf("Certificate Chain (%d):", len(tlsInfo.ChainSummary))).FontSize(app.fs(12)).TextColor(t.TextMuted)
-			for _, certLine := range tlsInfo.ChainSummary {
-				ui.Text(c, "  "+certLine).FontSize(app.fs(12)).Selectable()
-			}
+			chainKey := fmt.Sprintf("tls-chain:%d", scanID)
+			app.renderCollapsibleBlock(c, t, chainKey,
+				fmt.Sprintf("▸ Show Certificate Chain Details (%d Certificates)", len(tlsInfo.ChainSummary)),
+				"▾ Hide Certificate Chain Details",
+				func() {
+					ui.Box(c).FillWidth().Padding(8).Radius(6).Background(t.Background).Border(1, t.Border).Children(func() {
+						ui.Column(c).FillWidth().Gap(4).Children(func() {
+							for _, certLine := range tlsInfo.ChainSummary {
+								ui.Text(c, certLine).Font("monospace").FontSize(app.fs(11)).Selectable()
+							}
+						})
+					})
+				})
 		}
 
 		if len(tlsInfo.SANDomains) > 0 {
 			ui.Text(c, fmt.Sprintf("Subject Alternative Names (%d):", len(tlsInfo.SANDomains))).
 				FontSize(app.fs(12)).
 				TextColor(t.TextMuted)
-			for _, san := range tlsInfo.SANDomains {
-				app.renderPivotActionRow(c, t, scanID, "", san, "TLS SAN")
-			}
+			sanKey := fmt.Sprintf("tls-sans:%d", scanID)
+			app.renderTruncatedList(c, t, sanKey, len(tlsInfo.SANDomains), 6, "SAN Domains", func(count int) {
+				for i := 0; i < count; i++ {
+					app.renderPivotActionRow(c, t, scanID, "", tlsInfo.SANDomains[i], "TLS SAN")
+				}
+			})
 		}
 	})
 }
@@ -2475,12 +2586,15 @@ func (app *DesktopApp) renderMetadataCard(c *ui.Context, t *ui.Theme, scanID int
 						ui.Text(c, fmt.Sprintf("Sample Sitemap Entries (%d of %d):", len(meta.Sitemap.SampleURLs), meta.Sitemap.URLCount)).
 							FontSize(app.fs(12)).
 							TextColor(t.TextMuted)
-						for _, loc := range meta.Sitemap.SampleURLs {
-							locURL := loc
-							ui.Row(c).FillWidth().Gap(8).AlignItems(ui.Center).Children(func() {
-								ui.Link(c, locURL+" ↗", locURL)
-							})
-						}
+						smKey := fmt.Sprintf("sitemap-urls:%d", scanID)
+						app.renderTruncatedList(c, t, smKey, len(meta.Sitemap.SampleURLs), 5, "Sample Sitemap URLs", func(count int) {
+							for i := 0; i < count; i++ {
+								locURL := meta.Sitemap.SampleURLs[i]
+								ui.Row(c).FillWidth().Gap(8).AlignItems(ui.Center).Children(func() {
+									ui.Link(c, locURL+" ↗", locURL)
+								})
+							}
+						})
 					}
 					if len(meta.Sitemap.DiscoveredHosts) > 0 {
 						ui.Text(c, "Hosts Referenced in Sitemap:").FontSize(app.fs(12)).TextColor(t.TextMuted)
@@ -2540,56 +2654,59 @@ func (app *DesktopApp) renderSubdomainEnumerationCard(c *ui.Context, t *ui.Theme
 				return
 			}
 
-			for _, s := range info.Subdomains.Subdomains {
-				subItem := s
-				ui.Box(c).Key("sub:"+subItem.Subdomain).FillWidth().Padding(8).Radius(6).Border(1, t.Border).Children(func() {
-					ui.Row(c).FillWidth().Gap(8).AlignItems(ui.Center).Wrap().Children(func() {
-						ui.Text(c, subItem.Subdomain).FontSize(app.fs(13)).Bold().Selectable()
+			subListKey := fmt.Sprintf("subdomains-list:%d", scanID)
+			app.renderTruncatedList(c, t, subListKey, len(info.Subdomains.Subdomains), 8, "Subdomains", func(count int) {
+				for i := 0; i < count; i++ {
+					subItem := info.Subdomains.Subdomains[i]
+					ui.Box(c).Key("sub:"+subItem.Subdomain).FillWidth().Padding(8).Radius(6).Border(1, t.Border).Children(func() {
+						ui.Row(c).FillWidth().Gap(8).AlignItems(ui.Center).Wrap().Children(func() {
+							ui.Text(c, subItem.Subdomain).FontSize(app.fs(13)).Bold().Selectable()
 
-						if subItem.Active {
-							app.renderStatusPill(c, t, "ACTIVE", toneSuccess)
-						} else {
-							app.renderStatusPill(c, t, "HISTORICAL (CT)", toneWarning)
-						}
-
-						if len(subItem.Sources) > 0 {
-							app.renderStatusPill(c, t, strings.Join(subItem.Sources, "+"), toneInfo)
-						}
-
-						if len(subItem.IPAddresses) > 0 {
-							ui.Text(c, "IP: "+strings.Join(subItem.IPAddresses, ", ")).
-								FontSize(app.fs(12)).
-								TextColor(t.TextMuted).
-								Selectable()
-						}
-						if subItem.CNAME != "" {
-							ui.Text(c, "CNAME: "+subItem.CNAME).
-								FontSize(app.fs(12)).
-								TextColor(t.TextMuted).
-								Selectable()
-						}
-
-						ui.Spacer(c)
-
-						if !strings.EqualFold(subItem.Subdomain, info.Domain) {
-							lookupKey := strings.ToLower(strings.TrimSpace(subItem.Subdomain))
-							if existingID, exists := app.scannedTargets[lookupKey]; exists && existingID != scanID {
-								if ui.Button(c, "Open Scan →").Clicked() {
-									app.SelectScan(existingID)
-									app.activeTab = 0
-								}
-								if ui.Button(c, "Re-scan ↻").Disabled(app.scanning).Clicked() {
-									app.StartScan(subItem.Subdomain, scanID, "Subdomain")
-								}
+							if subItem.Active {
+								app.renderStatusPill(c, t, "ACTIVE", toneSuccess)
 							} else {
-								if ui.PrimaryButton(c, "Scan Subdomain ↗").Disabled(app.scanning).Clicked() {
-									app.StartScan(subItem.Subdomain, scanID, "Subdomain")
+								app.renderStatusPill(c, t, "HISTORICAL (CT)", toneWarning)
+							}
+
+							if len(subItem.Sources) > 0 {
+								app.renderStatusPill(c, t, strings.Join(subItem.Sources, "+"), toneInfo)
+							}
+
+							if len(subItem.IPAddresses) > 0 {
+								ui.Text(c, "IP: "+strings.Join(subItem.IPAddresses, ", ")).
+									FontSize(app.fs(12)).
+									TextColor(t.TextMuted).
+									Selectable()
+							}
+							if subItem.CNAME != "" {
+								ui.Text(c, "CNAME: "+subItem.CNAME).
+									FontSize(app.fs(12)).
+									TextColor(t.TextMuted).
+									Selectable()
+							}
+
+							ui.Spacer(c)
+
+							if !strings.EqualFold(subItem.Subdomain, info.Domain) {
+								lookupKey := strings.ToLower(strings.TrimSpace(subItem.Subdomain))
+								if existingID, exists := app.scannedTargets[lookupKey]; exists && existingID != scanID {
+									if ui.Button(c, "Open Scan →").Clicked() {
+										app.SelectScan(existingID)
+										app.activeTab = 0
+									}
+									if ui.Button(c, "Re-scan ↻").Disabled(app.scanning).Clicked() {
+										app.StartScan(subItem.Subdomain, scanID, "Subdomain")
+									}
+								} else {
+									if ui.PrimaryButton(c, "Scan Subdomain ↗").Disabled(app.scanning).Clicked() {
+										app.StartScan(subItem.Subdomain, scanID, "Subdomain")
+									}
 								}
 							}
-						}
+						})
 					})
-				})
-			}
+				}
+			})
 		}
 	})
 }
@@ -2768,31 +2885,37 @@ func (app *DesktopApp) renderReputationCard(c *ui.Context, t *ui.Theme, scanID i
 			return
 		}
 
-		// Render DNSBL provider badges/rows
-		ui.Row(c).FillWidth().Gap(8).AlignItems(ui.Center).Wrap().Children(func() {
-			for _, e := range rep.Entries {
-				entry := e
-				borderCol := t.Border
-				statusBadge := "CLEAN"
-				entryTone := toneSuccess
-				if entry.Listed {
-					borderCol = t.Danger
-					statusBadge = "LISTED"
-					entryTone = toneDanger
-				}
-				ui.Box(c).Key("dnsbl:"+entry.Zone+":"+entry.Target).PaddingX(8).PaddingY(6).Radius(6).Border(1, borderCol).Children(func() {
-					ui.Column(c).Gap(3).Children(func() {
-						ui.Row(c).Gap(6).AlignItems(ui.Center).Children(func() {
-							ui.Text(c, entry.Provider).FontSize(app.fs(12)).Bold()
-							app.renderStatusPill(c, t, statusBadge, entryTone)
+		// Render DNSBL provider badges/rows (progressive disclosure when all clean)
+		initialLimit := len(rep.Entries)
+		if rep.ListedCount == 0 && len(rep.Entries) > 4 {
+			initialLimit = 4
+		}
+		app.renderTruncatedList(c, t, fmt.Sprintf("dnsbl-list:%d", scanID), len(rep.Entries), initialLimit, "DNSBL Providers", func(count int) {
+			ui.Row(c).FillWidth().Gap(8).AlignItems(ui.Center).Wrap().Children(func() {
+				for i := 0; i < count; i++ {
+					entry := rep.Entries[i]
+					borderCol := t.Border
+					statusBadge := "CLEAN"
+					entryTone := toneSuccess
+					if entry.Listed {
+						borderCol = t.Danger
+						statusBadge = "LISTED"
+						entryTone = toneDanger
+					}
+					ui.Box(c).Key("dnsbl:"+entry.Zone+":"+entry.Target).PaddingX(8).PaddingY(6).Radius(6).Border(1, borderCol).Children(func() {
+						ui.Column(c).Gap(3).Children(func() {
+							ui.Row(c).Gap(6).AlignItems(ui.Center).Children(func() {
+								ui.Text(c, entry.Provider).FontSize(app.fs(12)).Bold()
+								app.renderStatusPill(c, t, statusBadge, entryTone)
+							})
+							ui.Text(c, fmt.Sprintf("%s (%s)", entry.Zone, entry.Category)).FontSize(app.fs(10)).TextColor(t.TextMuted)
+							if entry.Listed && entry.Reason != "" {
+								ui.Text(c, entry.Reason).FontSize(app.fs(11)).TextColor(t.Danger).Selectable()
+							}
 						})
-						ui.Text(c, fmt.Sprintf("%s (%s)", entry.Zone, entry.Category)).FontSize(app.fs(10)).TextColor(t.TextMuted)
-						if entry.Listed && entry.Reason != "" {
-							ui.Text(c, entry.Reason).FontSize(app.fs(11)).TextColor(t.Danger).Selectable()
-						}
 					})
-				})
-			}
+				}
+			})
 		})
 	})
 }
@@ -2889,32 +3012,42 @@ func (app *DesktopApp) renderZoneAuditCard(c *ui.Context, t *ui.Theme, scanID in
 					app.renderKeyValue(c, t, "DNSSEC Summary", za.DNSSECSummary)
 				}
 
-				if len(za.DSRecords) > 0 {
-					ui.Text(c, fmt.Sprintf("Parent Zone DS Records (%d):", len(za.DSRecords))).FontSize(app.fs(12)).TextColor(t.TextMuted)
-					for _, d := range za.DSRecords {
-						ds := d
-						ui.Row(c).Key(fmt.Sprintf("ds:%d:%s", ds.KeyTag, ds.Digest)).FillWidth().Gap(8).AlignItems(ui.Center).Wrap().Children(func() {
-							app.renderStatusPill(c, t, fmt.Sprintf("KeyTag: %d", ds.KeyTag), toneInfo)
-							app.renderStatusPill(c, t, ds.AlgoName, toneNeutral)
-							app.renderStatusPill(c, t, ds.DigestName, toneNeutral)
-							ui.Text(c, ds.Digest).FontSize(app.fs(11)).TextColor(t.TextMuted).Selectable()
-						})
-					}
-				}
+				if len(za.DSRecords) > 0 || len(za.DNSKEYRecords) > 0 {
+					dnssecKey := fmt.Sprintf("dnssec-keys:%d", scanID)
+					app.renderCollapsibleBlock(c, t, dnssecKey,
+						fmt.Sprintf("▸ Show Cryptographic DS & DNSKEY Records (%d DS, %d DNSKEY)", len(za.DSRecords), len(za.DNSKEYRecords)),
+						"▾ Hide Cryptographic DS & DNSKEY Records",
+						func() {
+							ui.Column(c).FillWidth().Gap(6).Children(func() {
+								if len(za.DSRecords) > 0 {
+									ui.Text(c, fmt.Sprintf("Parent Zone DS Records (%d):", len(za.DSRecords))).FontSize(app.fs(12)).TextColor(t.TextMuted)
+									for _, d := range za.DSRecords {
+										ds := d
+										ui.Row(c).Key(fmt.Sprintf("ds:%d:%s", ds.KeyTag, ds.Digest)).FillWidth().Gap(8).AlignItems(ui.Center).Wrap().Children(func() {
+											app.renderStatusPill(c, t, fmt.Sprintf("KeyTag: %d", ds.KeyTag), toneInfo)
+											app.renderStatusPill(c, t, ds.AlgoName, toneNeutral)
+											app.renderStatusPill(c, t, ds.DigestName, toneNeutral)
+											ui.Text(c, ds.Digest).Font("monospace").FontSize(app.fs(11)).TextColor(t.TextMuted).Selectable()
+										})
+									}
+								}
 
-				if len(za.DNSKEYRecords) > 0 {
-					ui.Text(c, fmt.Sprintf("Zone DNSKEY Records (%d):", len(za.DNSKEYRecords))).FontSize(app.fs(12)).TextColor(t.TextMuted)
-					for _, k := range za.DNSKEYRecords {
-						keyRec := k
-						ui.Row(c).Key(fmt.Sprintf("dnskey:%d:%d", keyRec.KeyTag, keyRec.Flags)).FillWidth().Gap(8).AlignItems(ui.Center).Wrap().Children(func() {
-							app.renderStatusPill(c, t, keyRec.Role, toneSuccess)
-							app.renderStatusPill(c, t, fmt.Sprintf("KeyTag: %d", keyRec.KeyTag), toneInfo)
-							app.renderStatusPill(c, t, keyRec.AlgoName, toneNeutral)
-							if keyRec.PublicKey != "" {
-								ui.Text(c, keyRec.PublicKey).FontSize(app.fs(11)).TextColor(t.TextMuted).Selectable()
-							}
+								if len(za.DNSKEYRecords) > 0 {
+									ui.Text(c, fmt.Sprintf("Zone DNSKEY Records (%d):", len(za.DNSKEYRecords))).FontSize(app.fs(12)).TextColor(t.TextMuted)
+									for _, k := range za.DNSKEYRecords {
+										keyRec := k
+										ui.Row(c).Key(fmt.Sprintf("dnskey:%d:%d", keyRec.KeyTag, keyRec.Flags)).FillWidth().Gap(8).AlignItems(ui.Center).Wrap().Children(func() {
+											app.renderStatusPill(c, t, keyRec.Role, toneSuccess)
+											app.renderStatusPill(c, t, fmt.Sprintf("KeyTag: %d", keyRec.KeyTag), toneInfo)
+											app.renderStatusPill(c, t, keyRec.AlgoName, toneNeutral)
+											if keyRec.PublicKey != "" {
+												ui.Text(c, keyRec.PublicKey).Font("monospace").FontSize(app.fs(11)).TextColor(t.TextMuted).Selectable()
+											}
+										})
+									}
+								}
+							})
 						})
-					}
 				}
 			})
 		})
@@ -3100,13 +3233,13 @@ func (app *DesktopApp) renderEmailAuthCard(c *ui.Context, t *ui.Theme, scanID in
 		// 2. SPF
 		if email.SPFRecord != nil {
 			app.renderKeyValue(c, t, "SPF Status", fmt.Sprintf("%s — %s (%s)", email.SPFRecord.Status, email.SPFRecord.Policy, email.SPFRecord.Description))
-			app.renderKeyValue(c, t, "SPF Raw", email.SPFRecord.Raw)
 			if len(email.SPFRecord.Includes) > 0 {
 				ui.Text(c, "SPF Includes (Drill-Down):").FontSize(app.fs(12)).TextColor(t.TextMuted)
 				for _, inc := range email.SPFRecord.Includes {
 					app.renderPivotActionRow(c, t, scanID, "", inc, "SPF Include")
 				}
 			}
+			app.renderCollapsibleRawRecord(c, t, fmt.Sprintf("spf-raw:%d", scanID), "SPF TXT Record", email.SPFRecord.Raw)
 		} else {
 			app.renderKeyValue(c, t, "SPF Record", "Not found")
 		}
@@ -3117,7 +3250,7 @@ func (app *DesktopApp) renderEmailAuthCard(c *ui.Context, t *ui.Theme, scanID in
 			if len(email.DMARCRecord.AggregateReports) > 0 {
 				app.renderKeyValue(c, t, "DMARC Reports (rua)", strings.Join(email.DMARCRecord.AggregateReports, ", "))
 			}
-			app.renderKeyValue(c, t, "DMARC Raw", email.DMARCRecord.Raw)
+			app.renderCollapsibleRawRecord(c, t, fmt.Sprintf("dmarc-raw:%d", scanID), "DMARC TXT Record", email.DMARCRecord.Raw)
 		} else {
 			app.renderKeyValue(c, t, "DMARC Record", "Not found")
 		}
@@ -3153,7 +3286,7 @@ func (app *DesktopApp) renderEmailAuthCard(c *ui.Context, t *ui.Theme, scanID in
 									}
 								})
 								if dkim.RawRecord != "" {
-									ui.Text(c, dkim.RawRecord).FontSize(app.fs(11)).TextColor(t.TextMuted).Selectable()
+									app.renderCollapsibleRawRecord(c, t, fmt.Sprintf("dkim-raw:%d:%s", scanID, dkim.Selector), "DKIM Key ("+dkim.Selector+")", dkim.RawRecord)
 								}
 							})
 						})
@@ -3201,7 +3334,7 @@ func (app *DesktopApp) renderEmailAuthCard(c *ui.Context, t *ui.Theme, scanID in
 						app.renderKeyValue(c, t, "MTA-STS Allowed MX", strings.Join(email.MTASTS.MXPatterns, ", "))
 					}
 					if email.MTASTS.DNSRecord != "" {
-						app.renderKeyValue(c, t, "MTA-STS DNS Record", email.MTASTS.DNSRecord)
+						app.renderCollapsibleRawRecord(c, t, fmt.Sprintf("mtasts-raw:%d", scanID), "MTA-STS TXT Record", email.MTASTS.DNSRecord)
 					}
 				} else {
 					ui.Text(c, "No _mta-sts DNS TXT record or /.well-known/mta-sts.txt policy detected.").
@@ -3214,7 +3347,7 @@ func (app *DesktopApp) renderEmailAuthCard(c *ui.Context, t *ui.Theme, scanID in
 						app.renderKeyValue(c, t, "TLS-RPT Endpoints", strings.Join(email.TLSRPT.Endpoints, ", "))
 					}
 					if email.TLSRPT.RawRecord != "" {
-						app.renderKeyValue(c, t, "TLS-RPT Raw", email.TLSRPT.RawRecord)
+						app.renderCollapsibleRawRecord(c, t, fmt.Sprintf("tlsrpt-raw:%d", scanID), "TLS-RPT TXT Record", email.TLSRPT.RawRecord)
 					}
 				}
 			})
@@ -3247,7 +3380,7 @@ func (app *DesktopApp) renderEmailAuthCard(c *ui.Context, t *ui.Theme, scanID in
 						app.renderKeyValue(c, t, "VMC Authority (a=)", email.BIMI.AuthorityURL)
 					}
 					if email.BIMI.RawRecord != "" {
-						app.renderKeyValue(c, t, "BIMI Raw", email.BIMI.RawRecord)
+						app.renderCollapsibleRawRecord(c, t, fmt.Sprintf("bimi-raw:%d", scanID), "BIMI TXT Record", email.BIMI.RawRecord)
 					}
 				} else {
 					ui.Text(c, "No default._bimi DNS TXT record detected.").

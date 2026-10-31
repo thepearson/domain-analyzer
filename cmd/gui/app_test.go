@@ -592,6 +592,13 @@ func TestDesktopAppDrillDownAndFeatures(t *testing.T) {
 	if !tester.HasText("DNSSEC: Secure (Signed & Validated)") || !tester.HasText("2606:2800:220:1:248:1893:25c8:1946") || !tester.HasText("AXFR: Refused (Secure)") {
 		t.Errorf("expected DNSSEC status, IPv6 AAAA address, and AXFR status badge to be rendered on scan page")
 	}
+	// Verify progressive disclosure toggle for DNSSEC DS/DNSKEY cryptographic records
+	if err := tester.Click("▸ Show Cryptographic DS & DNSKEY Records (1 DS, 1 DNSKEY)"); err != nil {
+		t.Fatalf("clicking DNSSEC DS/DNSKEY progressive disclosure toggle failed: %v", err)
+	}
+	if !tester.HasText("1F9876543210ABCDEF") {
+		t.Errorf("expected DS digest to be visible after expanding DNSSEC cryptographic records")
+	}
 
 	if err := tester.Click("Enumerate Subdomains"); err != nil {
 		t.Fatalf("clicking 'Enumerate Subdomains' failed: %v", err)
@@ -683,6 +690,13 @@ func TestDesktopAppDrillDownAndFeatures(t *testing.T) {
 	tester.Frame()
 	if !tester.HasText("google._domainkey.example.co.nz") || !tester.HasText("MTA-STS: enforce") || !tester.HasText("BIMI: Present") {
 		t.Errorf("expected DKIM selector, MTA-STS enforce mode, and BIMI badge to be rendered on scan page")
+	}
+	// Verify progressive disclosure toggle for Raw SPF TXT record
+	if err := tester.Click("▸ Show Raw SPF TXT Record"); err != nil {
+		t.Fatalf("clicking '▸ Show Raw SPF TXT Record' failed: %v", err)
+	}
+	if !tester.HasText("v=spf1 include:_spf.google.com -all") {
+		t.Errorf("expected raw SPF TXT string to be visible after clicking '▸ Show Raw SPF TXT Record'")
 	}
 
 	// Switch to "Summary & Reputation" sub-tab and run DNSBL / Reputation & Blacklist Check
