@@ -259,6 +259,19 @@ func (f *TabularFormatter) Format(w io.Writer, info *analyzer.DomainInfo) error 
 		}
 	}
 
+	// --- REPUTATION / DNSBL SECTION ---
+	if info.Reputation != nil {
+		fmt.Fprintln(tw, "\n==================================================")
+		fmt.Fprintf(tw, "CATEGORY: REPUTATION & BLACKLISTS (DNSBL)\n")
+		fmt.Fprintln(tw, "==================================================")
+		fmt.Fprintf(tw, "Blacklist Status\t%s\n", info.Reputation.Status)
+		for _, entry := range info.Reputation.Entries {
+			if entry.Listed {
+				fmt.Fprintf(tw, "LISTED [%s]\t%s (%s)\n", entry.Provider, entry.Reason, entry.Zone)
+			}
+		}
+	}
+
 	// --- SUBDOMAINS SECTION ---
 	if info.Subdomains != nil {
 		fmt.Fprintln(tw, "\n==================================================")

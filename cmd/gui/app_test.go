@@ -131,6 +131,7 @@ func TestDesktopAppDrillDownAndFeatures(t *testing.T) {
 	httpDoneCh := make(chan struct{}, 2)
 	emailDoneCh := make(chan struct{}, 2)
 	zoneDoneCh := make(chan struct{}, 2)
+	repDoneCh := make(chan struct{}, 2)
 	vulnDoneCh := make(chan struct{}, 2)
 	app.runner = ScanRunnerFunc{
 		AnalyzeDomain: func(domain string, checkVulns bool) *analyzer.DomainInfo {
@@ -391,6 +392,22 @@ func TestDesktopAppDrillDownAndFeatures(t *testing.T) {
 				},
 			}
 		},
+		CheckReputation: func(target string) *analyzer.ReputationResult {
+			defer func() { repDoneCh <- struct{}{} }()
+			return &analyzer.ReputationResult{
+				Checked:      true,
+				Target:       target,
+				ResolvedIP:   "93.184.216.34",
+				Status:       "Clean (0/12 Blacklists)",
+				TotalChecked: 12,
+				ListedCount:  0,
+				Entries: []analyzer.DNSBLEntry{
+					{Provider: "Spamhaus DBL", Zone: "dbl.spamhaus.org", Category: "Domain URI RBL", Target: "example.co.nz", Listed: false},
+					{Provider: "Spamhaus ZEN", Zone: "zen.spamhaus.org", Category: "IP RBL", Target: "93.184.216.34", Listed: false},
+				},
+				ExternalLinks: analyzer.BuildExternalReputationLinks(target, false),
+			}
+		},
 		LookupVulnerabilities: func(details []analyzer.TechDetail) ([]analyzer.Vulnerability, error) {
 			defer func() { vulnDoneCh <- struct{}{} }()
 			return []analyzer.Vulnerability{
@@ -404,7 +421,7 @@ func TestDesktopAppDrillDownAndFeatures(t *testing.T) {
 		},
 	}
 
-	tester := ui.NewTester(app.View, 1280, 4800)
+	tester := ui.NewTester(app.View, 1280, 5400)
 
 	// Verify initial seeded scan, .nz WHOIS link, and OWASP challenge links are displayed
 	if !tester.HasText("portal.example.co.nz") {
@@ -642,6 +659,21 @@ func TestDesktopAppDrillDownAndFeatures(t *testing.T) {
 	tester.Frame()
 	if !tester.HasText("DNSSEC: Secure (Signed & Validated)") || !tester.HasText("2606:2800:220:1:248:1893:25c8:1946") || !tester.HasText("AXFR: Refused (Secure)") {
 		t.Errorf("expected DNSSEC status, IPv6 AAAA address, and AXFR status badge to be rendered on scan page")
+	}
+
+	// Run DNSBL / Reputation & Blacklist Check
+	if err := tester.Click("Check Blacklists (DNSBL)"); err != nil {
+		t.Fatalf("clicking 'Check Blacklists (DNSBL)' failed: %v", err)
+	}
+	select {
+	case <-repDoneCh:
+	case <-time.After(3 * time.Second):
+		t.Fatalf("timed out waiting for background DNSBL Reputation Check")
+	}
+	time.Sleep(50 * time.Millisecond)
+	tester.Frame()
+	if !tester.HasText("Clean (0/12 Blacklists)") || !tester.HasText("Spamhaus DBL") || !tester.HasText("Google Safe Browsing ↗") {
+		t.Errorf("expected Clean (0/12 Blacklists) badge, Spamhaus DBL card, and Google Safe Browsing link to be rendered")
 	}
 
 	// Verify favicon persisted across sessions in scan list

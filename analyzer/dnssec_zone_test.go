@@ -66,4 +66,3 @@ func TestFormatDNSSECAlgorithmAndDigest(t *testing.T) {
 		t.Errorf("FormatDSDigestType(2) = %q", got)
 	}
 }
-

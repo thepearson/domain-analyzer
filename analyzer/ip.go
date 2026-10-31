@@ -29,6 +29,7 @@ type IPInfo struct {
 	Metadata        *WebsiteMetadata  `json:"metadata,omitempty"`
 	Ping            *PingResult       `json:"ping,omitempty"`
 	Traceroute      *TracerouteResult `json:"traceroute,omitempty"`
+	Reputation      *ReputationResult `json:"reputation,omitempty"`
 	PortScanned     bool              `json:"port_scanned,omitempty"`
 	OpenPorts       []PortService     `json:"open_ports,omitempty"`
 	VulnsChecked    bool              `json:"vulns_checked,omitempty"`
@@ -69,7 +70,7 @@ func AnalyzeIP(ip string, checkVulns bool) *IPInfo {
 	}
 
 	var wg sync.WaitGroup
-	wg.Add(6)
+	wg.Add(7)
 
 	// 1. Reverse DNS (PTR)
 	go func() {
@@ -249,6 +250,15 @@ func AnalyzeIP(ip string, checkVulns bool) *IPInfo {
 		pingRes := RunPing(cleanIP)
 		info.Lock()
 		info.Ping = pingRes
+		info.Unlock()
+	}()
+
+	// 7. DNSBL / Reputation & Blacklist Check
+	go func() {
+		defer wg.Done()
+		repRes := CheckReputation(cleanIP)
+		info.Lock()
+		info.Reputation = repRes
 		info.Unlock()
 	}()
 

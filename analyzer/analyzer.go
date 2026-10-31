@@ -119,6 +119,7 @@ type DomainInfo struct {
 	Subdomains      *SubdomainEnumeration `json:"subdomains,omitempty"`
 	Ping            *PingResult           `json:"ping,omitempty"`
 	Traceroute      *TracerouteResult     `json:"traceroute,omitempty"`
+	Reputation      *ReputationResult     `json:"reputation,omitempty"`
 	VulnsChecked    bool                  `json:"vulns_checked,omitempty"`
 	Vulnerabilities []Vulnerability       `json:"vulnerabilities,omitempty"`
 }
@@ -135,7 +136,7 @@ func Analyze(domain string, checkVulns bool) *DomainInfo {
 	}
 
 	var wg sync.WaitGroup
-	wg.Add(14)
+	wg.Add(15)
 	if checkVulns {
 		wg.Add(1)
 	}
@@ -261,7 +262,16 @@ func Analyze(domain string, checkVulns bool) *DomainInfo {
 		info.Unlock()
 	}()
 
-	// 15. Vulnerabilities (Conditional)
+	// 15. DNSBL / Reputation & Blacklist Check
+	go func() {
+		defer wg.Done()
+		repRes := CheckReputation(domain)
+		info.Lock()
+		info.Reputation = repRes
+		info.Unlock()
+	}()
+
+	// 16. Vulnerabilities (Conditional)
 	if checkVulns {
 		go func() {
 			defer wg.Done()

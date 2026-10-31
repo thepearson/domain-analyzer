@@ -134,6 +134,7 @@ type ScanRunnerFunc struct {
 	TraceHTTPChain        func(target string) *analyzer.HTTPTraceResult
 	InspectEmail          func(domain string) analyzer.EmailInfo
 	InspectZone           func(domain string) *analyzer.DNSSECAndZoneAudit
+	CheckReputation       func(target string) *analyzer.ReputationResult
 	LookupVulnerabilities func(details []analyzer.TechDetail) ([]analyzer.Vulnerability, error)
 }
 
@@ -195,6 +196,7 @@ func NewDesktopApp(store *storage.Store) *DesktopApp {
 			TraceHTTPChain:        analyzer.TraceHTTPChain,
 			InspectEmail:          analyzer.InspectEmailDeliverability,
 			InspectZone:           analyzer.InspectDNSSECAndZone,
+			CheckReputation:       analyzer.CheckReputation,
 			LookupVulnerabilities: analyzer.LookupVulnerabilities,
 		},
 	}
@@ -827,6 +829,51 @@ func (app *DesktopApp) StartHTTPTrace(scanID int64) {
 	}()
 }
 
+// StartReputationCheck queries DNS-based spam, malware, and phishing blacklists (DNSBL / DBL / URIBL) for the current scan.
+func (app *DesktopApp) StartReputationCheck(scanID int64) {
+	if app.currentScan == nil || app.currentScan.ID != scanID || app.scanning {
+		return
+	}
+	rec := app.currentScan
+	target := rec.Target
+	app.scanning = true
+	app.statusText = fmt.Sprintf("Checking DNSBL / DBL reputation & blacklists for %s...", target)
+
+	go func() {
+		repFn := app.runner.CheckReputation
+		if repFn == nil {
+			repFn = analyzer.CheckReputation
+		}
+		repRes := repFn(target)
+
+		var saveErr error
+		if app.store != nil {
+			if rec.TargetType == analyzer.TargetTypeIP && rec.IPInfo != nil {
+				rec.IPInfo.Lock()
+				rec.IPInfo.Reputation = repRes
+				rec.IPInfo.Unlock()
+				saveErr = app.store.UpdateIPScan(scanID, rec.IPInfo, "", rec.CheckVulns)
+			} else if rec.DomainInfo != nil {
+				rec.DomainInfo.Lock()
+				rec.DomainInfo.Reputation = repRes
+				rec.DomainInfo.Unlock()
+				saveErr = app.store.UpdateDomainScan(scanID, rec.DomainInfo, "", rec.CheckVulns)
+			}
+		}
+
+		app.runOnUI(func() {
+			app.scanning = false
+			if saveErr != nil {
+				app.statusText = fmt.Sprintf("Reputation save error: %v", saveErr)
+				return
+			}
+			app.statusText = fmt.Sprintf("Completed DNSBL reputation check for %s (%s)", target, repRes.Status)
+			app.RefreshHistory()
+			app.SelectScan(scanID)
+		})
+	}()
+}
+
 // StartZoneAudit runs a DNSSEC chain-of-trust, SOA timer, IPv6 AAAA parity, and AXFR zone transfer audit for the current domain scan.
 func (app *DesktopApp) StartZoneAudit(scanID int64) {
 	if app.currentScan == nil || app.currentScan.ID != scanID || app.currentScan.DomainInfo == nil || app.scanning {
@@ -1439,6 +1486,9 @@ func (app *DesktopApp) renderDomainDetails(c *ui.Context, t *ui.Theme, scanID in
 
 	// 8. Email Deliverability & Authentication Deep-Dive (MX, SPF, DMARC, DKIM, MTA-STS, TLS-RPT, BIMI)
 	app.renderEmailAuthCard(c, t, scanID, info)
+
+	// 9. DNSBL / Reputation & Blacklist Check
+	app.renderReputationCard(c, t, scanID, info.Domain, false, info.Reputation)
 }
 
 func (app *DesktopApp) renderIPDetails(c *ui.Context, t *ui.Theme, scanID int64, info *analyzer.IPInfo) {
@@ -1550,6 +1600,9 @@ func (app *DesktopApp) renderIPDetails(c *ui.Context, t *ui.Theme, scanID int64,
 
 	// 6. Website Metadata & Well-Known Files (robots.txt, security.txt, sitemap.xml)
 	app.renderMetadataCard(c, t, scanID, info.IP, info.Metadata)
+
+	// 7. DNSBL / Reputation & Blacklist Check
+	app.renderReputationCard(c, t, scanID, info.IP, true, info.Reputation)
 }
 
 func (app *DesktopApp) renderHTTPTraceCard(c *ui.Context, t *ui.Theme, scanID int64, target string, trace *analyzer.HTTPTraceResult) {
@@ -2180,6 +2233,78 @@ func (app *DesktopApp) renderPingAndTracerouteCards(c *ui.Context, t *ui.Theme, 
 				}
 			}
 		}
+	})
+}
+
+func (app *DesktopApp) renderReputationCard(c *ui.Context, t *ui.Theme, scanID int64, target string, isIP bool, rep *analyzer.ReputationResult) {
+	app.renderSectionCard(c, t, "DNSBL / Reputation & Blacklist Check (Spamhaus, Barracuda, SORBS, SpamCop, SURBL, URIBL)", func() {
+		ui.Row(c).FillWidth().Gap(10).AlignItems(ui.Center).Wrap().Children(func() {
+			btnLabel := "Check Blacklists (DNSBL)"
+			if rep != nil && rep.Checked {
+				btnLabel = "Re-check Blacklists ↻"
+			}
+			if ui.PrimaryButton(c, btnLabel).Disabled(app.scanning).Clicked() {
+				app.StartReputationCheck(scanID)
+			}
+
+			if rep == nil {
+				ui.Text(c, "Click 'Check Blacklists (DNSBL)' to query domain and IP reputation across major spam, malware, and abuse blocklists.").
+					FontSize(app.fs(12)).
+					TextColor(t.TextMuted)
+			} else {
+				ui.Badge(c, rep.Status)
+				if rep.ListedCount == 0 {
+					ui.Badge(c, "All Clean")
+				} else {
+					ui.Badge(c, fmt.Sprintf("%d Listed", rep.ListedCount))
+				}
+				if rep.ResolvedIP != "" && !isIP {
+					ui.Badge(c, "Checked IP: "+rep.ResolvedIP)
+				}
+			}
+		})
+
+		links := analyzer.BuildExternalReputationLinks(target, isIP)
+		if rep != nil && len(rep.ExternalLinks) > 0 {
+			links = rep.ExternalLinks
+		}
+		if len(links) > 0 {
+			ui.Row(c).FillWidth().Gap(10).AlignItems(ui.Center).Wrap().Children(func() {
+				ui.Text(c, "External Threat Intel:").FontSize(app.fs(12)).TextColor(t.TextMuted).MinWidth(140)
+				for _, l := range links {
+					ui.Link(c, l.Label, l.URL)
+				}
+			})
+		}
+
+		if rep == nil || len(rep.Entries) == 0 {
+			return
+		}
+
+		// Render DNSBL provider badges/rows
+		ui.Row(c).FillWidth().Gap(8).AlignItems(ui.Center).Wrap().Children(func() {
+			for _, e := range rep.Entries {
+				entry := e
+				borderCol := t.Border
+				statusBadge := "CLEAN"
+				if entry.Listed {
+					borderCol = t.Danger
+					statusBadge = "LISTED"
+				}
+				ui.Box(c).Key("dnsbl:"+entry.Zone+":"+entry.Target).PaddingX(8).PaddingY(6).Radius(6).Border(1, borderCol).Children(func() {
+					ui.Column(c).Gap(3).Children(func() {
+						ui.Row(c).Gap(6).AlignItems(ui.Center).Children(func() {
+							ui.Text(c, entry.Provider).FontSize(app.fs(12)).Bold()
+							ui.Badge(c, statusBadge)
+						})
+						ui.Text(c, fmt.Sprintf("%s (%s)", entry.Zone, entry.Category)).FontSize(app.fs(10)).TextColor(t.TextMuted)
+						if entry.Listed && entry.Reason != "" {
+							ui.Text(c, entry.Reason).FontSize(app.fs(11)).TextColor(t.Danger).Selectable()
+						}
+					})
+				})
+			}
+		})
 	})
 }
 

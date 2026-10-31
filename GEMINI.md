@@ -21,6 +21,7 @@ The project is structured into modular packages to ensure scalability and testab
 - **`analyzer`**: Contains the core logic for domain and IP analysis.
   - `Analyze(domain string, checkVulns bool)`: Orchestrates domain sub-modules concurrently using `sync.WaitGroup`.
   - `AnalyzeIP(ip string, checkVulns bool)`: Orchestrates IP reconnaissance (Reverse DNS PTR, IP WHOIS/ASN/CIDR, direct `:443` TLS SAN inspection, direct HTTP/WAF/tech fingerprinting).
+  - `reputation.go`: Multi-provider DNSBL / DBL / URIBL spam, malware, phishing, and botnet blacklist checker (`CheckReputation`) with open-resolver error filtering and external threat-intel links.
   - `dnssec_zone.go`: DNSSEC chain-of-trust (`DS`, `DNSKEY`, `RRSIG`, `AD` bit), `SOA` serial/timer, IPv6 (`AAAA`) parity, and authoritative `AXFR` zone transfer auditor (`InspectDNSSECAndZone`).
   - `http_trace.go`: HTTP → HTTPS redirect chain tracer and phase-by-phase performance timing waterfall (`TraceHTTPChain` using `net/http/httptrace`).
   - `email_auth.go`: Deep email deliverability and authentication inspector (`InspectEmailDeliverability` for MX hosts, SPF, DMARC, DKIM selector probing, MTA-STS RFC 8461, SMTP TLS-RPT RFC 8460, and BIMI).
