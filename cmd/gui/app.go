@@ -1371,6 +1371,10 @@ func (app *DesktopApp) View(c *ui.Context) {
 		}, func() {
 			app.renderDetailPane(c, t)
 		}).Grow(1).FillWidth()
+
+		// Footer Status Panel (bottom status bar)
+		ui.Divider(c)
+		app.renderStatusBar(c, t)
 	})
 
 	// New Session Confirmation Modal
@@ -1392,13 +1396,40 @@ func (app *DesktopApp) renderTopBar(c *ui.Context, t *ui.Theme) {
 		if ui.PrimaryButton(c, "Scan Target").Disabled(app.scanning || strings.TrimSpace(app.targetInput) == "").Clicked() {
 			app.StartScan(app.targetInput, 0, "")
 		}
+	})
+}
 
+func (app *DesktopApp) renderStatusBar(c *ui.Context, t *ui.Theme) {
+	ui.Row(c).FillWidth().PaddingX(12).PaddingY(6).Gap(10).AlignItems(ui.Center).Background(t.Surface).Children(func() {
 		if app.scanning {
-			ui.Spinner(c)
+			ui.Progress(c, -1).Label("Scan operation in progress").Width(150)
+			msg := app.statusText
+			if msg == "" {
+				msg = "Scan in progress..."
+			}
+			ui.Text(c, msg).FontSize(app.fs(12)).Bold().TextColor(t.Text)
+		} else {
+			if strings.Contains(strings.ToLower(app.statusText), "error") {
+				ui.Text(c, "⚠️ "+app.statusText).FontSize(app.fs(12)).TextColor(t.Danger)
+			} else if app.statusText != "" {
+				ui.Text(c, "✓ "+app.statusText).FontSize(app.fs(12)).TextColor(t.TextMuted)
+			} else {
+				ui.Text(c, "● Ready").FontSize(app.fs(12)).TextColor(t.TextMuted)
+			}
 		}
-		if app.statusText != "" {
-			ui.Text(c, app.statusText).FontSize(app.fs(12)).TextColor(t.TextMuted)
+
+		ui.Spacer(c)
+
+		if app.sessionFilePath != "" {
+			ui.Text(c, fmt.Sprintf("Session: %s", filepath.Base(app.sessionFilePath))).
+				FontSize(app.fs(11)).TextColor(t.TextMuted)
 		}
+
+		ui.Text(c, fmt.Sprintf("%d Scans", len(app.scans))).
+			FontSize(app.fs(11)).TextColor(t.TextMuted)
+
+		ui.Text(c, fmt.Sprintf("%d%%", int(app.textScale*100+0.5))).
+			FontSize(app.fs(11)).TextColor(t.TextMuted)
 	})
 }
 

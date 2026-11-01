@@ -99,6 +99,7 @@ The native GPU-accelerated desktop app (built with `github.com/egoist/mygo/ui` a
 - **Portable Sessions (`.rscan`)**: Export and import full scan sessions and target drill-down trees to/from portable `.rscan` files.
 - **One-Click Drill-Down (Pivoting)**: Click **`Scan Domain ↗`** or **`Scan IP ↗`** on any discovered entity—including `A` and `WWW` IP addresses, Apex domains, CNAME hops, TLS Certificate Subject Alternative Names (SANs), Reverse DNS (PTR) hostnames, Nameservers, and SPF `include:` domains.
 - **Lineage Tracking**: Tracks parent-to-child scan relationships so you can jump back via **`← Parent Scan`** or inspect child scans in the hierarchy.
+- **Footer Status Bar**: Persistent status bar with animated operation progress meter, active scan details, and session metadata.
 
 ```bash
 # Launch the desktop UI
@@ -110,6 +111,43 @@ The native GPU-accelerated desktop app (built with `github.com/egoist/mygo/ui` a
 # Optional custom SQLite database path
 ./rscan-ui -db ./project-scans.db
 ```
+
+### UI Screenshots & Features
+
+#### 1. Domain Overview & Reputation Status
+Multi-provider DNSBL / DBL / URIBL blacklist checking across 12+ providers (Spamhaus, Barracuda, SpamCop, SURBL, URIBL, SORBS) with direct links to external threat intelligence portals.
+
+![Domain Overview & Reputation Status](screenshots/1.png)
+
+#### 2. DNS Infrastructure & DNSSEC Zone Audit
+Audits `A` and `WWW` records, authoritative nameserver providers, IPv6 (`AAAA`) dual-stack parity, DNSSEC chain-of-trust, SOA serials/timers, and authoritative AXFR zone transfer vulnerabilities.
+
+![DNS Infrastructure & DNSSEC Zone Audit](screenshots/2.png)
+
+#### 3. WAF Detection & TLS Certificate Analysis
+Detects Web Application Firewalls (Cloudflare, AWS WAF, Fastly, Azure Front Door, Imperva, Wordfence) with live OWASP payload challenge probes, alongside deep TLS cipher inspection and certificate grading.
+
+![WAF Detection & TLS Certificate Analysis](screenshots/3.png)
+
+#### 4. Email Deliverability & Authentication
+Deep verification of mail exchange (MX) hosts, SPF enforcement policies, DMARC alignment, DKIM selector key probing across 22 common selectors, RFC 8461 MTA-STS, RFC 8460 SMTP TLS-RPT, and BIMI brand indicators.
+
+![Email Deliverability & Authentication](screenshots/4.png)
+
+#### 5. Network Diagnostics (Latency & Path Mapping)
+ICMP/TCP ping latency measurement with per-probe RTT statistics and packet loss calculation, plus multi-hop network traceroute hop analysis.
+
+![Network Diagnostics](screenshots/5.png)
+
+#### 6. Discovered Targets & Pivot Explorer
+Aggregates and normalizes all discovered infrastructure targets (apex domains, IP addresses, CNAME hops, SANs, PTR hostnames, nameservers) with one-click drill-down actions.
+
+![Discovered Targets & Pivot Explorer](screenshots/6.png)
+
+#### 7. IP Reconnaissance & Host Port Scanning
+Direct IP analysis featuring reverse DNS PTR resolution, IP WHOIS/ASN details, and concurrent TCP host port scanning with service banner extraction.
+
+![IP Reconnaissance & Host Port Scanning](screenshots/7.png)
 
 ## CLI Usage (`rscan`)
 

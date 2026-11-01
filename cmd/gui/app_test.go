@@ -563,6 +563,11 @@ func TestDesktopAppDrillDownAndFeatures(t *testing.T) {
 	app.SelectScan(parentID)
 	tester.Frame()
 
+	// Verify footer status bar is rendered
+	if !tester.HasText("1 Scans") {
+		t.Errorf("expected footer status bar to display '1 Scans'")
+	}
+
 	// Switch to Discovered Targets view and verify compact pivot row summary
 	if err := tester.Click("TARGETS"); err != nil {
 		t.Fatalf("clicking 'TARGETS' tile failed: %v", err)
@@ -584,6 +589,11 @@ func TestDesktopAppDrillDownAndFeatures(t *testing.T) {
 
 	time.Sleep(50 * time.Millisecond)
 	tester.Frame()
+
+	// Verify footer status bar updated with completion result text
+	if !tester.HasText("✓ Completed scan of 93.184.216.34") {
+		t.Errorf("expected footer status bar to show completion message for 93.184.216.34")
+	}
 
 	if app.currentScan == nil || app.currentScan.Target != "93.184.216.34" {
 		t.Fatalf("expected currentScan to navigate to drilled-down IP 93.184.216.34, got %+v", app.currentScan)
