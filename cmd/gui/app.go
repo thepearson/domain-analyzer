@@ -405,13 +405,19 @@ func (app *DesktopApp) PromptNewSession() {
 	app.newSessionModalOpen = true
 }
 
-// ClearSession resets the current active target, selected scan, and session file binding.
-// Scans remain safely preserved in SQLite.
+// ClearSession resets the current active target, selected scan, session file binding,
+// and clears out all saved scans from the database.
 func (app *DesktopApp) ClearSession() {
+	if app.store != nil {
+		_ = app.store.ClearAllScans()
+	}
+	app.faviconCache = make(map[int64]cachedFavicon)
+	app.scannedTargets = make(map[string]int64)
+	app.RefreshHistory()
 	app.SelectScan(0)
 	app.targetInput = ""
 	app.sessionFilePath = ""
-	app.statusText = "New session started"
+	app.statusText = "New session started — all saved scans cleared"
 	app.newSessionModalOpen = false
 }
 
@@ -1415,7 +1421,7 @@ func (app *DesktopApp) renderNewSessionModal(c *ui.Context, t *ui.Theme) {
 					})
 
 					// Description
-					ui.Text(c, "Clear current session and target view? All previous scans remain safely preserved in the local SQLite database.").
+					ui.Text(c, "Start a new session? This will permanently clear out all saved scans from the database and reset the current workspace.").
 						FontSize(app.fs(12)).TextColor(t.TextMuted)
 
 					// Action Buttons

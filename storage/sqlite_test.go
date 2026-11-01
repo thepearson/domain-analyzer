@@ -219,5 +219,17 @@ func TestStoreExportAndImportSession(t *testing.T) {
 		t.Errorf("expected imported child ParentScanID to be %d, got %d", scans[0].ID, scans[1].ParentScanID)
 	}
 
+	// Test ClearAllScans
+	if err := destStore.ClearAllScans(); err != nil {
+		t.Fatalf("ClearAllScans failed: %v", err)
+	}
+	remaining, err := destStore.ListScans("")
+	if err != nil {
+		t.Fatalf("ListScans after ClearAllScans failed: %v", err)
+	}
+	if len(remaining) != 0 {
+		t.Errorf("expected 0 scans after ClearAllScans, got %d", len(remaining))
+	}
+
 	_ = childID
 }

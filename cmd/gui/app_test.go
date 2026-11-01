@@ -550,12 +550,17 @@ func TestDesktopAppDrillDownAndFeatures(t *testing.T) {
 	if err := tester.Click("Clear Session"); err != nil {
 		t.Fatalf("clicking 'Clear Session' confirmation button failed: %v", err)
 	}
-	if app.currentScan != nil || app.sessionFilePath != "" || app.targetInput != "" {
-		t.Errorf("expected active scan, sessionFilePath, and targetInput to be cleared after New Session")
+	if app.currentScan != nil || app.sessionFilePath != "" || app.targetInput != "" || len(app.scans) != 0 {
+		t.Errorf("expected active scan, sessionFilePath, targetInput, and all saved scans to be cleared after New Session")
 	}
 
-	// Re-select our initial scan for the remainder of the test
-	app.SelectScan(app.scans[0].ID)
+	// Re-insert seed scan and refresh for the remainder of the test
+	parentID, err = store.SaveDomainScan(seedDomain, 0, "", false)
+	if err != nil {
+		t.Fatalf("re-saving seedDomain failed: %v", err)
+	}
+	app.RefreshHistory()
+	app.SelectScan(parentID)
 	tester.Frame()
 
 	// Switch to Discovered Targets view and verify compact pivot row summary

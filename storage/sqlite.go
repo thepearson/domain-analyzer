@@ -789,6 +789,12 @@ func (s *Store) DeleteScan(id int64) error {
 	return err
 }
 
+// ClearAllScans deletes all scans and lineage records from the database.
+func (s *Store) ClearAllScans() error {
+	_, err := s.db.Exec(`DELETE FROM scans`)
+	return err
+}
+
 // SessionData represents a full exported reconnaissance session containing all scans and lineage trees.
 type SessionData struct {
 	Version    int           `json:"version"`
