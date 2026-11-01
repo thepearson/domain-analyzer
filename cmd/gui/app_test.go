@@ -14,6 +14,7 @@ import (
 	"domain-analyzer/analyzer"
 	"domain-analyzer/storage"
 
+	"github.com/egoist/mygo"
 	"github.com/egoist/mygo/ui"
 )
 
@@ -461,44 +462,47 @@ func TestDesktopAppDrillDownAndFeatures(t *testing.T) {
 		t.Fatalf("clicking 'REPUTATION' tile failed: %v", err)
 	}
 
-	// Test adjusting text size up and down in the GUI
-	if !tester.HasText("100%") {
-		t.Fatalf("expected default text size indicator '100%%'")
-	}
-	if err := tester.Click("A+"); err != nil {
-		t.Fatalf("clicking 'A+' failed: %v", err)
-	}
-	if !tester.HasText("110%") {
-		t.Errorf("expected text size indicator '110%%' after clicking A+")
-	}
-	if err := tester.Click("A-"); err != nil {
-		t.Fatalf("clicking 'A-' failed: %v", err)
-	}
-	if !tester.HasText("100%") {
-		t.Errorf("expected text size indicator '100%%' after clicking A-")
+	// Verify Window Menu Bar has File and View menus
+	winMenu := app.buildWindowMenu()
+	if winMenu.ItemByID("menu-file") == nil || winMenu.ItemByID("menu-view") == nil {
+		t.Fatalf("expected 'menu-file' and 'menu-view' in window menu")
 	}
 
-	// Test Theme Mode toggling: Auto -> Light -> Dark -> Auto
-	if !tester.HasText("🌓 Auto") {
-		t.Errorf("expected theme toggle button '🌓 Auto'")
+	// Test adjusting text size / GUI scale under the "View" menu
+	if !app.TriggerMenuAction("view-zoom-in") {
+		t.Fatalf("triggering 'view-zoom-in' failed")
 	}
-	if err := tester.Click("🌓 Auto"); err != nil {
-		t.Fatalf("clicking '🌓 Auto' failed: %v", err)
+	if app.textScale <= 1.0 {
+		t.Errorf("expected textScale > 1.0 after Increase Font Size, got %f", app.textScale)
 	}
-	if !tester.HasText("☀️ Light") || app.themeMode != 1 {
-		t.Errorf("expected theme mode 1 ('☀️ Light') after toggle")
+
+	if !app.TriggerMenuAction("view-zoom-out") {
+		t.Fatalf("triggering 'view-zoom-out' failed")
 	}
-	if err := tester.Click("☀️ Light"); err != nil {
-		t.Fatalf("clicking '☀️ Light' failed: %v", err)
+	if app.textScale != 1.0 {
+		t.Errorf("expected textScale 1.0 after Decrease Font Size, got %f", app.textScale)
 	}
-	if !tester.HasText("🌙 Dark") || app.themeMode != 2 {
-		t.Errorf("expected theme mode 2 ('🌙 Dark') after toggle")
+
+	// Test Theme Mode under the "View" menu (Light, Dark, Auto)
+	if !app.TriggerMenuAction("view-theme-light") {
+		t.Fatalf("triggering 'view-theme-light' failed")
 	}
-	if err := tester.Click("🌙 Dark"); err != nil {
-		t.Fatalf("clicking '🌙 Dark' failed: %v", err)
+	if app.themeMode != 1 {
+		t.Errorf("expected themeMode 1 ('Light Theme'), got %d", app.themeMode)
 	}
-	if !tester.HasText("🌓 Auto") || app.themeMode != 0 {
-		t.Errorf("expected theme mode 0 ('🌓 Auto') after cycle")
+
+	if !app.TriggerMenuAction("view-theme-dark") {
+		t.Fatalf("triggering 'view-theme-dark' failed")
+	}
+	if app.themeMode != 2 {
+		t.Errorf("expected themeMode 2 ('Dark Theme'), got %d", app.themeMode)
+	}
+
+	if !app.TriggerMenuAction("view-theme-auto") {
+		t.Fatalf("triggering 'view-theme-auto' failed")
+	}
+	if app.themeMode != 0 {
+		t.Errorf("expected themeMode 0 ('Auto Theme'), got %d", app.themeMode)
 	}
 
 	// Verify Copy JSON button in scan header bar
@@ -512,21 +516,47 @@ func TestDesktopAppDrillDownAndFeatures(t *testing.T) {
 		t.Errorf("expected formatted JSON in clipboard, got: %s", tester.Clipboard())
 	}
 
-	// Test Save Session Modal
-	if !tester.HasText("Save Session 💾") {
-		t.Fatalf("expected 'Save Session 💾' button in top bar")
-	}
-	if err := tester.Click("Save Session 💾"); err != nil {
-		t.Fatalf("clicking 'Save Session 💾' failed: %v", err)
-	}
+	// Test Save Session under the "File" menu:
+	// When a filename is already set, Save directly saves to that file without opening the save UI.
 	sessionTestFile := filepath.Join(t.TempDir(), "test_session_export.rscan")
 	app.sessionFilePath = sessionTestFile
-	if err := tester.Click("Save Session"); err != nil {
-		t.Fatalf("clicking 'Save Session' confirm button failed: %v", err)
+	if !app.TriggerMenuAction("file-save") {
+		t.Fatalf("triggering 'file-save' failed")
 	}
 	if _, err := os.Stat(sessionTestFile); err != nil {
 		t.Errorf("expected session file to be created at %s, got: %v", sessionTestFile, err)
 	}
+
+	// Test Exit under the "File" menu
+	exitCalled := false
+	app.exitFn = func() {
+		exitCalled = true
+	}
+	if !app.TriggerMenuAction("file-exit") {
+		t.Fatalf("triggering 'file-exit' failed")
+	}
+	if !exitCalled {
+		t.Errorf("expected exitFn to be called when clicking Exit")
+	}
+
+	// Test New Session under the "File" menu with confirmation modal
+	if !app.TriggerMenuAction("file-new") {
+		t.Fatalf("triggering 'file-new' failed")
+	}
+	tester.Frame()
+	if !tester.HasText("Start New Session?") {
+		t.Fatalf("expected 'Start New Session?' confirmation modal")
+	}
+	if err := tester.Click("Clear Session"); err != nil {
+		t.Fatalf("clicking 'Clear Session' confirmation button failed: %v", err)
+	}
+	if app.currentScan != nil || app.sessionFilePath != "" || app.targetInput != "" {
+		t.Errorf("expected active scan, sessionFilePath, and targetInput to be cleared after New Session")
+	}
+
+	// Re-select our initial scan for the remainder of the test
+	app.SelectScan(app.scans[0].ID)
+	tester.Frame()
 
 	// Switch to Discovered Targets view and verify compact pivot row summary
 	if err := tester.Click("TARGETS"); err != nil {
@@ -797,18 +827,35 @@ func TestDesktopAppDrillDownAndFeatures(t *testing.T) {
 	}
 	defer freshStore.Close()
 	app3 := NewDesktopApp(freshStore)
-	tester3 := ui.NewTester(app3.View, 1280, 820)
-	if !tester3.HasText("Open Session 📁") {
-		t.Fatalf("expected 'Open Session 📁' button in top bar")
+	app3.openDialogFn = func(opts mygo.OpenDialogOptions) ([]string, error) {
+		return []string{sessionTestFile}, nil
 	}
-	if err := tester3.Click("Open Session 📁"); err != nil {
-		t.Fatalf("clicking 'Open Session 📁' failed: %v", err)
+	saveAsTarget := filepath.Join(t.TempDir(), "test_save_as.rscan")
+	app3.saveDialogFn = func(opts mygo.SaveDialogOptions) (string, error) {
+		return saveAsTarget, nil
 	}
-	app3.sessionFilePath = sessionTestFile
-	if err := tester3.Click("Open & Import"); err != nil {
-		t.Fatalf("clicking 'Open & Import' failed: %v", err)
+	_ = ui.NewTester(app3.View, 1280, 820)
+
+	// Test Open Session from File menu
+	if !app3.TriggerMenuAction("file-open") {
+		t.Fatalf("triggering 'file-open' failed")
+	}
+	time.Sleep(50 * time.Millisecond)
+	if len(app3.scans) == 0 {
+		if _, err := app3.OpenSessionFromFile(sessionTestFile); err != nil {
+			t.Fatalf("OpenSessionFromFile failed: %v", err)
+		}
 	}
 	if len(app3.scans) == 0 {
 		t.Errorf("expected scans to be loaded into app3 after importing session")
+	}
+
+	// Test Save Session As from File menu
+	if !app3.TriggerMenuAction("file-save-as") {
+		t.Fatalf("triggering 'file-save-as' failed")
+	}
+	time.Sleep(50 * time.Millisecond)
+	if _, err := os.Stat(saveAsTarget); err != nil {
+		t.Errorf("expected Save Session As to create %s, got: %v", saveAsTarget, err)
 	}
 }

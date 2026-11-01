@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/url"
+	"path/filepath"
 	"sort"
 	"strings"
 	"sync"
@@ -175,10 +176,12 @@ type DesktopApp struct {
 	ipCategoryTab     int
 	themeMode         int // 0: Auto (system), 1: Light, 2: Dark
 
-	sessionModalOpen  bool
-	sessionModalMode  int // 0: Save Session, 1: Open Session
-	sessionFilePath   string
-	sessionModalError string
+	newSessionModalOpen bool
+	sessionFilePath     string
+
+	openDialogFn func(opts mygo.OpenDialogOptions) ([]string, error)
+	saveDialogFn func(opts mygo.SaveDialogOptions) (string, error)
+	exitFn       func()
 
 	scanning   bool
 	statusText string
@@ -207,6 +210,11 @@ func NewDesktopApp(store *storage.Store) *DesktopApp {
 		techFaviconCache: make(map[string]cachedFavicon),
 		techFetching:     make(map[string]bool),
 		expandedSections: make(map[string]bool),
+		openDialogFn:     mygo.Dialog.Open,
+		saveDialogFn:     mygo.Dialog.Save,
+		exitFn: func() {
+			mygo.App.Quit()
+		},
 		runner: ScanRunnerFunc{
 			AnalyzeDomain:         analyzer.Analyze,
 			AnalyzeIP:             analyzer.AnalyzeIP,
@@ -232,6 +240,293 @@ func NewDesktopApp(store *storage.Store) *DesktopApp {
 
 func (app *DesktopApp) SetWindow(win *mygo.Window) {
 	app.win = win
+	app.setupWindowMenu(win)
+}
+
+func (app *DesktopApp) buildWindowMenu() *mygo.Menu {
+	return mygo.NewMenu([]*mygo.MenuItem{
+		{
+			ID:    "menu-file",
+			Label: "File",
+			Submenu: []*mygo.MenuItem{
+				{
+					ID:          "file-new",
+					Label:       "New Session",
+					Accelerator: "CmdOrCtrl+N",
+					Click: func(item *mygo.MenuItem, w *mygo.Window) {
+						if app.win != nil {
+							app.win.Update(func() { app.PromptNewSession() })
+						} else {
+							app.PromptNewSession()
+						}
+					},
+				},
+				{
+					ID:          "file-open",
+					Label:       "Open Session…",
+					Accelerator: "CmdOrCtrl+O",
+					Click: func(item *mygo.MenuItem, w *mygo.Window) {
+						app.OpenSessionDialog()
+					},
+				},
+				{
+					ID:          "file-save",
+					Label:       "Save Session",
+					Accelerator: "CmdOrCtrl+S",
+					Click: func(item *mygo.MenuItem, w *mygo.Window) {
+						app.SaveSession()
+					},
+				},
+				{
+					ID:          "file-save-as",
+					Label:       "Save Session As…",
+					Accelerator: "CmdOrCtrl+Shift+S",
+					Click: func(item *mygo.MenuItem, w *mygo.Window) {
+						app.SaveSessionAsDialog()
+					},
+				},
+				mygo.Separator(),
+				{
+					ID:          "file-exit",
+					Label:       "Exit",
+					Accelerator: "CmdOrCtrl+Q",
+					Click: func(item *mygo.MenuItem, w *mygo.Window) {
+						app.Exit()
+					},
+				},
+			},
+		},
+		{
+			ID:    "menu-view",
+			Label: "View",
+			Submenu: []*mygo.MenuItem{
+				{
+					ID:          "view-zoom-in",
+					Label:       "Increase Font Size (A+)",
+					Accelerator: "CmdOrCtrl+=",
+					Click: func(item *mygo.MenuItem, w *mygo.Window) {
+						if app.win != nil {
+							app.win.Update(app.IncreaseTextSize)
+						} else {
+							app.IncreaseTextSize()
+						}
+					},
+				},
+				{
+					ID:          "view-zoom-out",
+					Label:       "Decrease Font Size (A-)",
+					Accelerator: "CmdOrCtrl+-",
+					Click: func(item *mygo.MenuItem, w *mygo.Window) {
+						if app.win != nil {
+							app.win.Update(app.DecreaseTextSize)
+						} else {
+							app.DecreaseTextSize()
+						}
+					},
+				},
+				{
+					ID:          "view-zoom-reset",
+					Label:       "Reset Font Size (100%)",
+					Accelerator: "CmdOrCtrl+0",
+					Click: func(item *mygo.MenuItem, w *mygo.Window) {
+						if app.win != nil {
+							app.win.Update(app.ResetTextSize)
+						} else {
+							app.ResetTextSize()
+						}
+					},
+				},
+				mygo.Separator(),
+				{
+					ID:      "view-theme-auto",
+					Label:   "Auto Theme",
+					Type:    mygo.MenuItemRadio,
+					Checked: app.themeMode == 0,
+					Click: func(item *mygo.MenuItem, w *mygo.Window) {
+						if app.win != nil {
+							app.win.Update(func() { app.themeMode = 0 })
+						} else {
+							app.themeMode = 0
+						}
+					},
+				},
+				{
+					ID:      "view-theme-light",
+					Label:   "Light Theme",
+					Type:    mygo.MenuItemRadio,
+					Checked: app.themeMode == 1,
+					Click: func(item *mygo.MenuItem, w *mygo.Window) {
+						if app.win != nil {
+							app.win.Update(func() { app.themeMode = 1 })
+						} else {
+							app.themeMode = 1
+						}
+					},
+				},
+				{
+					ID:      "view-theme-dark",
+					Label:   "Dark Theme",
+					Type:    mygo.MenuItemRadio,
+					Checked: app.themeMode == 2,
+					Click: func(item *mygo.MenuItem, w *mygo.Window) {
+						if app.win != nil {
+							app.win.Update(func() { app.themeMode = 2 })
+						} else {
+							app.themeMode = 2
+						}
+					},
+				},
+			},
+		},
+	})
+}
+
+func (app *DesktopApp) setupWindowMenu(win *mygo.Window) {
+	if win == nil {
+		return
+	}
+	menu := app.buildWindowMenu()
+	win.SetMenu(menu)
+	mygo.App.SetMenu(menu)
+}
+
+// TriggerMenuAction executes the Click handler of a window menu item by its ID.
+func (app *DesktopApp) TriggerMenuAction(id string) bool {
+	menu := app.buildWindowMenu()
+	if item := menu.ItemByID(id); item != nil && item.Click != nil {
+		item.Click(item, app.win)
+		return true
+	}
+	return false
+}
+
+// PromptNewSession opens the confirmation dialog to clear the current active session.
+func (app *DesktopApp) PromptNewSession() {
+	app.newSessionModalOpen = true
+}
+
+// ClearSession resets the current active target, selected scan, and session file binding.
+// Scans remain safely preserved in SQLite.
+func (app *DesktopApp) ClearSession() {
+	app.SelectScan(0)
+	app.targetInput = ""
+	app.sessionFilePath = ""
+	app.statusText = "New session started"
+	app.newSessionModalOpen = false
+}
+
+// SaveSessionToFile saves all scans and pivots to filePath.
+func (app *DesktopApp) SaveSessionToFile(filePath string) error {
+	path := strings.TrimSpace(filePath)
+	if path == "" {
+		return fmt.Errorf("empty session file path")
+	}
+	if filepath.Ext(path) == "" {
+		path += ".rscan"
+	}
+	if err := app.store.ExportSessionToFile(path); err != nil {
+		app.statusText = fmt.Sprintf("Export error: %v", err)
+		return err
+	}
+	app.sessionFilePath = path
+	app.statusText = fmt.Sprintf("Session saved to %s", filepath.Base(path))
+	return nil
+}
+
+// OpenSessionFromFile imports scans from filePath and selects the latest imported scan.
+func (app *DesktopApp) OpenSessionFromFile(filePath string) (int, error) {
+	path := strings.TrimSpace(filePath)
+	if path == "" {
+		return 0, fmt.Errorf("empty session file path")
+	}
+	count, err := app.store.ImportSessionFromFile(path)
+	if err != nil {
+		app.statusText = fmt.Sprintf("Import error: %v", err)
+		return 0, err
+	}
+	app.sessionFilePath = path
+	app.statusText = fmt.Sprintf("Imported %d scans from %s", count, filepath.Base(path))
+	app.RefreshHistory()
+	if len(app.scans) > 0 {
+		app.SelectScan(app.scans[0].ID)
+	}
+	return count, nil
+}
+
+// SaveSession saves the current session to the existing sessionFilePath, or opens the native save dialog if not yet set.
+func (app *DesktopApp) SaveSession() {
+	if strings.TrimSpace(app.sessionFilePath) != "" {
+		_ = app.SaveSessionToFile(app.sessionFilePath)
+		if app.win != nil {
+			app.win.Update(func() {})
+		}
+		return
+	}
+	app.SaveSessionAsDialog()
+}
+
+// SaveSessionAsDialog opens the native file save UI to choose a destination file.
+func (app *DesktopApp) SaveSessionAsDialog() {
+	go func() {
+		defaultPath := app.sessionFilePath
+		if defaultPath == "" {
+			defaultPath = "session.rscan"
+		}
+		path, err := app.saveDialogFn(mygo.SaveDialogOptions{
+			Parent:      app.win,
+			Title:       "Save Session As",
+			DefaultPath: defaultPath,
+			Filters: []mygo.FileFilter{
+				{Name: "ReconnaScan Sessions (*.rscan)", Extensions: []string{"rscan"}},
+				{Name: "All Files (*.*)", Extensions: []string{"*"}},
+			},
+		})
+		if err != nil || path == "" {
+			return
+		}
+		if app.win != nil {
+			app.win.Update(func() {
+				_ = app.SaveSessionToFile(path)
+			})
+		} else {
+			_ = app.SaveSessionToFile(path)
+		}
+	}()
+}
+
+// OpenSessionDialog opens the native file chooser UI to select a .rscan file to import.
+func (app *DesktopApp) OpenSessionDialog() {
+	go func() {
+		paths, err := app.openDialogFn(mygo.OpenDialogOptions{
+			Parent:      app.win,
+			Title:       "Open ReconnaScan Session",
+			DefaultPath: app.sessionFilePath,
+			Filters: []mygo.FileFilter{
+				{Name: "ReconnaScan Sessions (*.rscan)", Extensions: []string{"rscan"}},
+				{Name: "All Files (*.*)", Extensions: []string{"*"}},
+			},
+		})
+		if err != nil || len(paths) == 0 || paths[0] == "" {
+			return
+		}
+		targetPath := paths[0]
+		if app.win != nil {
+			app.win.Update(func() {
+				_, _ = app.OpenSessionFromFile(targetPath)
+			})
+		} else {
+			_, _ = app.OpenSessionFromFile(targetPath)
+		}
+	}()
+}
+
+// Exit terminates the program. Past scans are persistently stored in SQLite.
+func (app *DesktopApp) Exit() {
+	if app.exitFn != nil {
+		app.exitFn()
+	} else {
+		mygo.App.Quit()
+	}
 }
 
 func (app *DesktopApp) fs(base float32) float32 {
@@ -1072,8 +1367,8 @@ func (app *DesktopApp) View(c *ui.Context) {
 		}).Grow(1).FillWidth()
 	})
 
-	// Session Import / Export Overlay Modal
-	app.renderSessionModal(c, t)
+	// New Session Confirmation Modal
+	app.renderNewSessionModal(c, t)
 }
 
 func (app *DesktopApp) renderTopBar(c *ui.Context, t *ui.Theme) {
@@ -1098,157 +1393,40 @@ func (app *DesktopApp) renderTopBar(c *ui.Context, t *ui.Theme) {
 		if app.statusText != "" {
 			ui.Text(c, app.statusText).FontSize(app.fs(12)).TextColor(t.TextMuted)
 		}
-
-		// Session File Management (Open Session / Save Session)
-		if ui.Button(c, "Open Session 📁").Tooltip("Load a saved reconnaissance session from file (.rscan)").Clicked() {
-			app.sessionModalOpen = true
-			app.sessionModalMode = 1
-			app.sessionModalError = ""
-			if app.sessionFilePath == "" {
-				app.sessionFilePath = "session.rscan"
-			}
-		}
-		if ui.Button(c, "Save Session 💾").Tooltip("Export current scan session to file (.rscan)").Clicked() {
-			app.sessionModalOpen = true
-			app.sessionModalMode = 0
-			app.sessionModalError = ""
-			if app.sessionFilePath == "" {
-				app.sessionFilePath = "session.rscan"
-			}
-		}
-
-		// Text Size Controls (A- / % / A+)
-		ui.Row(c).Gap(4).AlignItems(ui.Center).Children(func() {
-			if ui.Button(c, "A-").Tooltip("Decrease text size").Disabled(app.textScale <= 0.71).Clicked() {
-				app.DecreaseTextSize()
-			}
-			pctLabel := fmt.Sprintf("%d%%", int(app.textScale*100+0.5))
-			if ui.Button(c, pctLabel).Tooltip("Reset text size to 100%").Clicked() {
-				app.ResetTextSize()
-			}
-			if ui.Button(c, "A+").Tooltip("Increase text size").Disabled(app.textScale >= 1.99).Clicked() {
-				app.IncreaseTextSize()
-			}
-		})
-
-		// Theme Appearance Toggle (Auto / Light / Dark)
-		themeLabel := "🌓 Auto"
-		if app.themeMode == 1 {
-			themeLabel = "☀️ Light"
-		} else if app.themeMode == 2 {
-			themeLabel = "🌙 Dark"
-		}
-		if ui.Button(c, themeLabel).Tooltip("Toggle theme appearance (Auto / Light / Dark)").Clicked() {
-			app.themeMode = (app.themeMode + 1) % 3
-		}
 	})
 }
 
-func (app *DesktopApp) renderSessionModal(c *ui.Context, t *ui.Theme) {
-	if !app.sessionModalOpen {
+func (app *DesktopApp) renderNewSessionModal(c *ui.Context, t *ui.Theme) {
+	if !app.newSessionModalOpen {
 		return
 	}
 
 	ui.Overlay(c, func() {
 		ui.Box(c).Fill().Background(ui.RGBA(0, 0, 0, 0.55)).Center().Children(func() {
-			ui.Box(c).Width(480).Padding(20).Radius(10).Background(t.Surface).Border(1, t.Border).Children(func() {
+			ui.Box(c).Width(440).Padding(20).Radius(10).Background(t.Surface).Border(1, t.Border).Children(func() {
 				ui.Column(c).FillWidth().Gap(14).Children(func() {
 					// Title & Close Button
 					ui.Row(c).FillWidth().AlignItems(ui.Center).Children(func() {
-						title := "Save Session to File"
-						if app.sessionModalMode == 1 {
-							title = "Open Session from File"
-						}
-						ui.Text(c, title).FontSize(app.fs(16)).Bold()
+						ui.Text(c, "Start New Session?").FontSize(app.fs(16)).Bold()
 						ui.Spacer(c)
 						if ui.Button(c, "✕").Tooltip("Close dialog").Clicked() {
-							app.sessionModalOpen = false
-							app.sessionModalError = ""
+							app.newSessionModalOpen = false
 						}
 					})
 
 					// Description
-					desc := "Export all saved scans, target trees, and reconnaissance history to a portable .rscan session file."
-					if app.sessionModalMode == 1 {
-						desc = "Load and import scans from a previously exported .rscan session file into your local database."
-					}
-					ui.Text(c, desc).FontSize(app.fs(12)).TextColor(t.TextMuted)
-
-					// File path input
-					ui.Column(c).FillWidth().Gap(4).Children(func() {
-						ui.Text(c, "Session File Path (.rscan):").FontSize(app.fs(11)).Bold().TextColor(t.TextMuted)
-						inp := ui.TextInput(c, &app.sessionFilePath).
-							Placeholder("e.g. session.rscan or /path/to/session.rscan").
-							FillWidth()
-
-						if inp.Submitted() && strings.TrimSpace(app.sessionFilePath) != "" {
-							path := strings.TrimSpace(app.sessionFilePath)
-							if app.sessionModalMode == 0 {
-								if err := app.store.ExportSessionToFile(path); err != nil {
-									app.sessionModalError = fmt.Sprintf("Export error: %v", err)
-								} else {
-									app.sessionModalOpen = false
-									app.sessionModalError = ""
-									c.Toast("Session saved to " + path)
-								}
-							} else {
-								count, err := app.store.ImportSessionFromFile(path)
-								if err != nil {
-									app.sessionModalError = fmt.Sprintf("Import error: %v", err)
-								} else {
-									app.sessionModalOpen = false
-									app.sessionModalError = ""
-									app.RefreshHistory()
-									if len(app.scans) > 0 {
-										app.SelectScan(app.scans[0].ID)
-									}
-									c.Toast(fmt.Sprintf("Imported %d scans from %s", count, path))
-								}
-							}
-						}
-					})
-
-					if app.sessionModalError != "" {
-						app.renderStatusPill(c, t, app.sessionModalError, toneDanger)
-					}
+					ui.Text(c, "Clear current session and target view? All previous scans remain safely preserved in the local SQLite database.").
+						FontSize(app.fs(12)).TextColor(t.TextMuted)
 
 					// Action Buttons
 					ui.Row(c).FillWidth().Gap(8).AlignItems(ui.Center).Children(func() {
 						ui.Spacer(c)
 						if ui.Button(c, "Cancel").Clicked() {
-							app.sessionModalOpen = false
-							app.sessionModalError = ""
+							app.newSessionModalOpen = false
 						}
-
-						if app.sessionModalMode == 0 {
-							// Export / Save
-							if ui.PrimaryButton(c, "Save Session").Disabled(strings.TrimSpace(app.sessionFilePath) == "").Clicked() {
-								path := strings.TrimSpace(app.sessionFilePath)
-								if err := app.store.ExportSessionToFile(path); err != nil {
-									app.sessionModalError = fmt.Sprintf("Export error: %v", err)
-								} else {
-									app.sessionModalOpen = false
-									app.sessionModalError = ""
-									c.Toast("Session saved to " + path)
-								}
-							}
-						} else {
-							// Import / Open
-							if ui.PrimaryButton(c, "Open & Import").Disabled(strings.TrimSpace(app.sessionFilePath) == "").Clicked() {
-								path := strings.TrimSpace(app.sessionFilePath)
-								count, err := app.store.ImportSessionFromFile(path)
-								if err != nil {
-									app.sessionModalError = fmt.Sprintf("Import error: %v", err)
-								} else {
-									app.sessionModalOpen = false
-									app.sessionModalError = ""
-									app.RefreshHistory()
-									if len(app.scans) > 0 {
-										app.SelectScan(app.scans[0].ID)
-									}
-									c.Toast(fmt.Sprintf("Imported %d scans from %s", count, path))
-								}
-							}
+						if ui.PrimaryButton(c, "Clear Session").Clicked() {
+							app.ClearSession()
+							app.newSessionModalOpen = false
 						}
 					})
 				})

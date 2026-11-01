@@ -94,6 +94,7 @@ go build -o rscan-ui ./cmd/gui
 
 The native GPU-accelerated desktop app (built with `github.com/egoist/mygo/ui` and `modernc.org/sqlite`) retains all scans persistently across sessions and lets you interactively drill down into discovered entities:
 
+- **Traditional Window Menu Bar**: Clean `File` (New, Open, Save, Save As, Exit) and `View` (GUI Scale / Font Size, Light / Dark / Auto themes) menu bar with native shortcuts.
 - **Persistent Scan History**: Automatically saves all domain and IP scans to a local SQLite database (`~/.config/reconnascan/scans.db` on Linux) with instant search/filtering.
 - **Portable Sessions (`.rscan`)**: Export and import full scan sessions and target drill-down trees to/from portable `.rscan` files.
 - **One-Click Drill-Down (Pivoting)**: Click **`Scan Domain ↗`** or **`Scan IP ↗`** on any discovered entity—including `A` and `WWW` IP addresses, Apex domains, CNAME hops, TLS Certificate Subject Alternative Names (SANs), Reverse DNS (PTR) hostnames, Nameservers, and SPF `include:` domains.
